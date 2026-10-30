@@ -10,6 +10,8 @@ use cpal::{BufferSize, Stream, StreamConfig};
 use crate::Error;
 
 const RING_SECONDS: u32 = 30;
+/// Audio queued before output (re)starts, so a TTS barely faster than real time doesn't run dry and click.
+const PREROLL_MS: u32 = 200;
 
 /// State shared between the callback, the feeding thread and readers such as the UI.
 #[derive(Default)]
@@ -18,6 +20,8 @@ pub struct PlaybackState {
     queued: AtomicUsize,
     flush: AtomicBool,
     generation: AtomicU64,
+    /// Nothing more follows for now: play what is queued even if it is shorter than the pre-roll.
+    draining: AtomicBool,
 }
 
 impl PlaybackState {
@@ -59,6 +63,8 @@ impl Playback {
         let (tx, mut rx) = rtrb::RingBuffer::<f32>::new((sample_rate * RING_SECONDS) as usize);
         let state = Arc::new(PlaybackState::default());
         let st = state.clone();
+        let preroll = (sample_rate * PREROLL_MS / 1000) as usize;
+        let mut primed = false;
         let stream = dev
             .build_output_stream(
                 config,
@@ -69,9 +75,11 @@ impl Playback {
                             chunk.commit_all();
                         }
                     }
+                    let queued = rx.slots();
+                    primed = queued > 0 && (primed || queued >= preroll || st.draining.load(Ordering::Relaxed));
                     let mut sum = 0.0;
                     for frame in out.chunks_mut(channels) {
-                        let s = rx.pop().unwrap_or(0.0);
+                        let s = if primed { rx.pop().unwrap_or(0.0) } else { 0.0 };
                         sum += s * s;
                         frame.fill(s);
                     }
@@ -90,6 +98,7 @@ impl Playback {
     /// Queues mono samples recorded at `rate`, waiting while the ring is full.
     /// Returns false if `stop` was called meanwhile.
     pub fn play(&mut self, pcm: &[f32], rate: u32) -> bool {
+        self.state.draining.store(false, Ordering::Relaxed);
         let generation = self.state.generation.load(Ordering::SeqCst);
         let samples = resample_linear(pcm, rate, self.sample_rate);
         let mut rest = &samples[..];
@@ -115,9 +124,14 @@ impl Playback {
         }
         true
     }
+
+    /// No more audio for now (end of a sentence): the rest plays without waiting for the pre-roll.
+    pub fn drain(&self) {
+        self.state.draining.store(true, Ordering::Relaxed);
+    }
 }
 
-/// Good enough for speech; the TTS rate (22.05 kHz) rarely matches the device.
+/// Good enough for speech; the TTS rate (24 kHz) rarely matches the device.
 fn resample_linear(pcm: &[f32], from: u32, to: u32) -> Vec<f32> {
     if from == to || pcm.is_empty() {
         return pcm.to_vec();

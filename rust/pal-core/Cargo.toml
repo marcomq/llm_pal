@@ -7,7 +7,7 @@ license.workspace = true
 [dependencies]
 cpal = "0.18.2"
 crossbeam-channel = "0.5.17"
-# ort has no stable 2.0; rc releases break the API, hence the exact pin (same as mq-bridge-onnx).
+# ort has no stable 2.0; rc releases break the API, hence the exact pin.
 ort = { version = "=2.0.0-rc.15", default-features = false, features = ["std", "download-binaries", "tls-rustls", "api-22"] }
 rtrb = "0.4.1"
 rubato = "5.0.1"

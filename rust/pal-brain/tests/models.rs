@@ -5,6 +5,7 @@ use std::time::Instant;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use pal_brain::language::Language;
 use pal_brain::llm::{Llm, LlmConfig, LocalLlm};
 use pal_brain::persona::Persona;
 use pal_brain::prosody_tags::{self, ProsodyTags};
@@ -61,12 +62,14 @@ fn llm_comments_on_transcripts_and_stops_when_cancelled() {
     let model = LocalLlm::new(&root().join("models/Qwen3.5-0.8B-Q4_K_M.gguf"), LlmConfig::default()).unwrap();
     let mut llm = model.session().unwrap();
     eprintln!("llm load {} ms", t.elapsed().as_millis());
-    let mut persona = Persona::kitt();
+    let mut persona = Persona::kitt(Language::German);
     let mut tags = ProsodyTags::default();
     let never = AtomicBool::new(false);
     for (turn, seg) in segments().into_iter().enumerate() {
-        let line =
-            Persona::user_line(&stt.transcribe(&seg.pcm).unwrap(), &prosody_tags::format(&tags.tag(&seg.features)));
+        let line = Persona::user_line(
+            &stt.transcribe(&seg.pcm).unwrap(),
+            &prosody_tags::format(&tags.tag(&seg.features), Language::German),
+        );
         let t = Instant::now();
         let mut first = None;
         let reply = llm.reply(&persona.messages(&line), &never, &mut |_| {

@@ -1,8 +1,6 @@
 //! Speech understanding and replies on top of pal-core segments: STT, LLM, prosody tags, sentence streaming, TTS.
 
 pub mod agent;
-#[cfg(target_os = "macos")]
-pub mod apple_tts;
 pub mod language;
 pub mod llm;
 pub mod numbers;
@@ -10,7 +8,6 @@ pub mod persona;
 pub mod pocket_speaker;
 pub mod prosody_tags;
 pub mod sentences;
-pub mod speaker;
 pub mod stt;
 
 #[derive(Debug, thiserror::Error)]

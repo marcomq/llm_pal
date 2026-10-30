@@ -2,15 +2,20 @@
 //! Hugging Face cache, shared with the Python package, and `http(s)://` URLs through
 //! `~/.cache/pocket_tts`.
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Result, bail};
+#[cfg(feature = "download")]
+use anyhow::Context;
+#[cfg(feature = "download")]
 use sha2::{Digest, Sha256};
-use std::path::{Path, PathBuf};
+#[cfg(feature = "download")]
+use std::path::Path;
+use std::path::PathBuf;
 use std::sync::OnceLock;
 
 /// pal-tts change: a folder holding `hf://` files as `<owner>/<repo>/<file>`, used instead of downloading.
 static LOCAL: OnceLock<PathBuf> = OnceLock::new();
 
-/// pal-tts change: see [`LOCAL`]; for platforms without the downloader's TLS setup, e.g. Android.
+/// pal-tts change: see [`LOCAL`]; needed without the `download` feature, e.g. on Android.
 pub fn use_local_files(dir: PathBuf) {
     let _ = LOCAL.set(dir);
 }
@@ -28,7 +33,7 @@ pub fn download_if_necessary(file_path: &str) -> Result<PathBuf> {
             return Ok(path);
         }
         download_hf(repo_id, &filename, revision)
-            .with_context(|| format!("cannot download {file_path}"))
+            .map_err(|e| e.context(format!("cannot download {file_path}")))
     } else {
         Ok(PathBuf::from(file_path))
     }
@@ -49,6 +54,17 @@ fn split_hf_path(path: &str) -> Result<(&str, String, Option<&str>)> {
     }
 }
 
+#[cfg(not(feature = "download"))]
+fn download_hf(repo_id: &str, filename: &str, _: Option<&str>) -> Result<PathBuf> {
+    bail!("{repo_id}/{filename}: downloads are off (pal-tts `download` feature), see use_local_files")
+}
+
+#[cfg(not(feature = "download"))]
+fn download_url(url: &str) -> Result<PathBuf> {
+    bail!("{url}: downloads are off (pal-tts `download` feature)")
+}
+
+#[cfg(feature = "download")]
 /// The client reads `HF_TOKEN`, `HF_ENDPOINT`, `HF_HOME` and the token `hf auth login` stores.
 fn download_hf(repo_id: &str, filename: &str, revision: Option<&str>) -> Result<PathBuf> {
     let client = hf_hub::HFClientSync::new()?;
@@ -62,6 +78,7 @@ fn download_hf(repo_id: &str, filename: &str, revision: Option<&str>) -> Result<
     Ok(path)
 }
 
+#[cfg(feature = "download")]
 pub fn cache_directory() -> Result<PathBuf> {
     let home = std::env::home_dir().context("cannot locate the home directory")?;
     let dir = home.join(".cache").join("pocket_tts");
@@ -69,6 +86,7 @@ pub fn cache_directory() -> Result<PathBuf> {
     Ok(dir)
 }
 
+#[cfg(feature = "download")]
 fn download_url(url: &str) -> Result<PathBuf> {
     let url_path = url.split(['?', '#']).next().unwrap_or(url);
     let url_path = url_path.splitn(4, '/').nth(3).unwrap_or("");

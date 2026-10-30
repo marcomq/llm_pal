@@ -64,7 +64,7 @@ impl Stt {
         }
     }
 
-    /// The spoken language as an ISO 639-1 code; German until set.
+    /// The spoken language as an ISO 639-1 code; whisper detects it until set.
     pub fn set_language(&mut self, code: &str) -> Result<()> {
         let c = CString::new(code).map_err(err)?;
         // SAFETY: the handle is live and exclusively borrowed; c is NUL-terminated.

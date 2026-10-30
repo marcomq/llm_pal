@@ -1,6 +1,6 @@
 #!/bin/sh
-# Usage: ./build.sh setup | desktop | test | listen | file <wav> | comment | godot | android | install | push-models
-# pal-stt (whisper.cpp) is a shared library next to pal-desktop, see rust/pal-stt/Cargo.toml.
+# Usage: ./build.sh setup | test | godot | android | install | push-models
+# pal-stt (whisper.cpp) is a shared library next to pal-godot, see rust/pal-stt/Cargo.toml.
 # android: debug APK in build/; install: also installs it; push-models: copies models/ to the phone (adb).
 set -eu
 cd "$(dirname "$0")"
@@ -81,14 +81,10 @@ push_pocket() {
 
 case "${1:-}" in
     setup) sh scripts/fetch-models.sh && sh scripts/make-test-audio.sh ;;
-    desktop) (cd rust && cargo build --release -p pal-stt -p pal-desktop --features bridge) ;;
-    test) (cd rust && cargo build -p pal-stt && cargo test --workspace --features pal-desktop/bridge -- --include-ignored --skip speaker) ;;
-    listen) shift; (cd rust && cargo build --release -p pal-desktop) && rust/target/release/pal-desktop listen "$@" ;;
-    file) shift; (cd rust && cargo build --release -p pal-desktop) && rust/target/release/pal-desktop file "$@" ;;
-    comment) shift; (cd rust && cargo build --release -p pal-stt -p pal-desktop) && rust/target/release/pal-desktop comment "$@" ;;
+    test) (cd rust && cargo build -p pal-stt && cargo test --workspace -- --include-ignored --skip speaker) ;;
     godot) run_godot ;;
     android) build_android ;;
     install) build_android && adb install -r "$APK" ;;
     push-models) push_models ;;
-    *) echo "usage: $0 setup | desktop | test | listen [args] | file <wav> | comment [args] | godot | android | install | push-models" >&2; exit 1 ;;
+    *) echo "usage: $0 setup | test | godot | android | install | push-models" >&2; exit 1 ;;
 esac

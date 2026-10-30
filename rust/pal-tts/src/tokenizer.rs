@@ -1,13 +1,11 @@
 //! Port of `pocket_tts/modules/text_conditioner.py`: a SentencePiece `.model` or a Hugging Face
 //! `tokenizer.json`, picked from the config's `tokenizer` field or the file's suffix.
-//! pal-tts change: SentencePiece only with the `sentencepiece` feature (its protobuf clashes with onnxruntime's).
+//! pal-tts change: no SentencePiece; German and English use tokenizer.json.
 
 use anyhow::{Context, Result, bail};
 use std::sync::Arc;
 
 pub enum Tokenizer {
-    #[cfg(feature = "sentencepiece")]
-    SentencePiece(sentencepiece::SentencePieceProcessor),
     Json(Box<tokenizers::Tokenizer>),
 }
 
@@ -28,28 +26,12 @@ impl Tokenizer {
             }
             Ok(Self::Json(Box::new(tokenizer)))
         } else {
-            #[cfg(not(feature = "sentencepiece"))]
-            bail!("{tokenizer_path}: SentencePiece tokenizers need the `sentencepiece` feature of pal-tts");
-            #[cfg(feature = "sentencepiece")]
-            {
-            log::info!("Loading sentencepiece tokenizer from {tokenizer_path}");
-            let sp = sentencepiece::SentencePieceProcessor::open(&local_path)
-                .with_context(|| format!("cannot load {}", local_path.display()))?;
-            if sp.len() != n_bins {
-                bail!(
-                    "sentencepiece tokenizer has vocab size={} but nbins={n_bins} was specified",
-                    sp.len()
-                )
-            }
-            Ok(Self::SentencePiece(sp))
-            }
+            bail!("{tokenizer_path}: SentencePiece tokenizers are not supported, only tokenizer.json")
         }
     }
 
     pub fn encode(&self, text: &str) -> Result<Vec<u32>> {
         match self {
-            #[cfg(feature = "sentencepiece")]
-            Self::SentencePiece(sp) => Ok(sp.encode(text)?.into_iter().map(|p| p.id).collect()),
             // `add_special_tokens` as in Python's `Tokenizer.encode` default.
             Self::Json(tok) => Ok(tok
                 .encode(text, true)
@@ -61,8 +43,6 @@ impl Tokenizer {
 
     pub fn decode(&self, ids: &[u32]) -> Result<String> {
         match self {
-            #[cfg(feature = "sentencepiece")]
-            Self::SentencePiece(sp) => Ok(sp.decode_piece_ids(ids)?),
             Self::Json(tok) => tok.decode(ids, true).map_err(|e| anyhow::anyhow!("{e}")),
         }
     }

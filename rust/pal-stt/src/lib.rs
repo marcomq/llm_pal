@@ -1,4 +1,4 @@
-//! Speech to text (German by default) with whisper.cpp behind a small C ABI, loaded at runtime by pal-brain.
+//! Speech to text with whisper.cpp behind a small C ABI, loaded at runtime by pal-brain.
 
 use std::ffi::{CStr, CString, c_char};
 
@@ -6,12 +6,12 @@ use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextPar
 
 /// whisper.cpp refuses input shorter than 1 s.
 const MIN_SAMPLES: usize = 16_000 + 1600;
-/// Segments whisper itself rates as silence are dropped; they are often hallucinated ("Untertitel von ...").
+/// Segments whisper itself rates as silence are dropped; they are often hallucinated ("Subtitles by ...").
 const NO_SPEECH_MAX: f32 = 0.6;
 /// Peak below -50 dBFS counts as silence; whisper invents sentences for it.
 const SILENCE_PEAK: f32 = 0.003;
-/// Speech has about 3 words per second; more tokens than this are a hallucination loop ("Ein Raum gefüllt. Ein Raum
-/// gefüllt. ..."), which otherwise runs on for seconds.
+/// Speech has about 3 words per second; more tokens than this are a hallucination loop ("A room filled. A room filled.
+/// ..."), which otherwise runs on for seconds.
 const TOKENS_PER_SECOND: usize = 8;
 
 pub struct PalStt {
@@ -36,7 +36,7 @@ impl PalStt {
         let ctx =
             WhisperContext::new_with_params(model, WhisperContextParameters::default()).map_err(|e| e.to_string())?;
         let threads = std::thread::available_parallelism().map_or(4, |n| n.get().min(4)) as i32;
-        Ok(Self { state: ctx.create_state().map_err(|e| e.to_string())?, threads, language: "de".into() })
+        Ok(Self { state: ctx.create_state().map_err(|e| e.to_string())?, threads, language: "auto".into() })
     }
 
     fn transcribe(&mut self, pcm: &[f32]) -> Result<String, String> {
@@ -81,9 +81,10 @@ impl PalStt {
     }
 }
 
-/// Removes whisper's sound notes like "* Musik *", "[Applaus]" or "(lacht)".
+/// Removes whisper's sound notes like "* Musik *", "[Applaus]" or "(lacht)"; an unclosed one keeps its text.
 fn strip_annotations(text: &str) -> String {
     let mut out = String::new();
+    let mut note = String::new();
     let mut close = None;
     for c in text.chars() {
         match (close, c) {
@@ -96,11 +97,15 @@ fn strip_annotations(text: &str) -> String {
                     ')'
                 })
             }
-            (Some(end), _) if c == end => close = None,
+            (Some(end), _) if c == end => {
+                close = None;
+                note.clear();
+            }
             (None, _) => out.push(c),
-            _ => {}
+            _ => note.push(c),
         }
     }
+    out.push_str(&note);
     out.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
@@ -191,5 +196,6 @@ mod tests {
     fn strips_sound_notes() {
         assert_eq!(super::strip_annotations(" * Musik * "), "");
         assert_eq!(super::strip_annotations("Na ja (lacht) gut [Applaus]"), "Na ja gut");
+        assert_eq!(super::strip_annotations("Ich (glaube das nicht"), "Ich glaube das nicht");
     }
 }

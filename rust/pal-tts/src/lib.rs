@@ -1,5 +1,5 @@
-//! Kyutai Pocket TTS in-process. All modules except this one are copied unchanged from
-//! kyutai-labs/pocket-tts v4.0.1 (`rust/src`, MIT, see LICENSE-KYUTAI).
+//! Kyutai Pocket TTS in-process. All modules except this one are copied from kyutai-labs/pocket-tts v4.0.1
+//! (`rust/src`, MIT, see LICENSE-KYUTAI); local edits are marked "pal-tts change".
 
 #[allow(dead_code)]
 mod audio;

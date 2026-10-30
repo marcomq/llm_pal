@@ -518,13 +518,4 @@ mod tests {
         let yaml = format!("{yaml}\nnot_a_field: 1\n");
         assert!(Config::parse(&yaml).is_err());
     }
-
-    #[test]
-    fn drifting_config_is_recognized() {
-        let (_, yaml) = CONFIGS
-            .iter()
-            .find(|(name, _)| *name == "english_drifting_26-09")
-            .unwrap();
-        assert_eq!(Config::parse(yaml).unwrap().flow_type(), FlowType::Drifting);
-    }
 }

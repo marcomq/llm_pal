@@ -2,22 +2,23 @@
 //! Text in square brackets is dropped: the prompt's prosody tags, which small models like to echo. The first piece
 //! may end at a comma already, so the voice starts sooner.
 
-const ABBREVIATIONS: &[&str] = &[
-    "z.", "B.", "z.B.", "d.h.", "bzw.", "ca.", "usw.", "etc.", "Dr.", "Nr.", "vgl.", "evtl.", "ggf.", "u.a.", "Mr.",
-    "Mrs.", "Ms.", "e.g.", "i.e.", "vs.",
-];
+use crate::language::Language;
 
-#[derive(Default)]
 pub struct Sentences {
+    abbreviations: &'static [&'static str],
     buf: String,
     in_bracket: bool,
     started: bool,
 }
 
-/// Words a first piece needs before a comma may end it; "Ach, Michael," alone would sound cut off.
+/// Words a first piece needs before a comma may end it; "Oh, Michael," alone would sound cut off.
 const FIRST_PIECE_WORDS: usize = 4;
 
 impl Sentences {
+    pub fn new(language: Language) -> Self {
+        Self { abbreviations: language.profile().abbreviations, buf: String::new(), in_bracket: false, started: false }
+    }
+
     /// Appends text and returns the sentences it completed.
     pub fn push(&mut self, text: &str) -> Vec<String> {
         for c in text.chars() {
@@ -62,11 +63,11 @@ impl Sentences {
         })
     }
 
-    /// "z.B. " or an ordinal like "3. Oktober" does not end a sentence.
+    /// An abbreviation like "e.g. " or an ordinal like "3. " does not end a sentence.
     fn is_abbreviation_or_number(&self, end: usize) -> bool {
         let word = self.buf[..end].rsplit(char::is_whitespace).next().unwrap_or("");
         let digits = &word[..word.len() - 1];
-        ABBREVIATIONS.contains(&word) || (!digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit()))
+        self.abbreviations.contains(&word) || (!digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit()))
     }
 }
 
@@ -81,45 +82,51 @@ fn push_trimmed(out: &mut Vec<String>, s: &str) {
 mod tests {
     use super::*;
 
-    fn split(tokens: &[&str]) -> Vec<String> {
-        let mut s = Sentences::default();
+    fn split_in(language: Language, tokens: &[&str]) -> Vec<String> {
+        let mut s = Sentences::new(language);
         let mut out: Vec<String> = tokens.iter().flat_map(|t| s.push(t)).collect();
         out.extend(s.finish());
         out
     }
 
+    fn split(tokens: &[&str]) -> Vec<String> {
+        split_in(Language::English, tokens)
+    }
+
     #[test]
     fn splits_on_sentence_ends_across_tokens() {
-        let out = split(&["Na", " super", ". Und", " jetzt", "?", " Echt", " jetzt", "!"]);
-        assert_eq!(out, ["Na super.", "Und jetzt?", "Echt jetzt!"]);
+        let out = split(&["Oh", " great", ". And", " now", "?", " Really", " now", "!"]);
+        assert_eq!(out, ["Oh great.", "And now?", "Really now!"]);
     }
 
     #[test]
     fn first_piece_may_end_at_a_comma() {
-        let out = split(&["Ach, Michael, das ist", " ja toll, wirklich", ". Noch einer, bitte."]);
-        assert_eq!(out, ["Ach, Michael, das ist ja toll,", "wirklich.", "Noch einer, bitte."]);
+        let out = split(&["Oh, Michael, that is", " really great, honestly", ". One more, please."]);
+        assert_eq!(out, ["Oh, Michael, that is really great,", "honestly.", "One more, please."]);
     }
 
     #[test]
     fn sentence_is_released_once_whitespace_follows() {
-        let mut s = Sentences::default();
-        assert!(s.push("Fertig.").is_empty());
-        assert_eq!(s.push(" Nächster"), ["Fertig."]);
+        let mut s = Sentences::new(Language::English);
+        assert!(s.push("Done.").is_empty());
+        assert_eq!(s.push(" Next"), ["Done."]);
     }
 
     #[test]
     fn keeps_abbreviations_numbers_and_decimals() {
-        let out = split(&["Am 3. Oktober gab es z. B. 2.5 Kuchen. Toll."]);
-        assert_eq!(out, ["Am 3. Oktober gab es z. B. 2.5 Kuchen.", "Toll."]);
+        let out = split(&["On the 3. day there was e.g. 2.5 cake. Great."]);
+        assert_eq!(out, ["On the 3. day there was e.g. 2.5 cake.", "Great."]);
+        let out = split_in(Language::German, &["Es gab z. B. Kuchen. Toll."]);
+        assert_eq!(out, ["Es gab z. B. Kuchen.", "Toll."]);
     }
 
     #[test]
     fn drops_echoed_tags_across_tokens() {
-        assert_eq!(split(&["Na gut [la", "ut]. [Frage] Wirklich?"]), ["Na gut.", "Wirklich?"]);
+        assert_eq!(split(&["Fine [lo", "ud]. [question] Really?"]), ["Fine.", "Really?"]);
     }
 
     #[test]
     fn newline_ends_a_sentence_and_punctuation_only_is_dropped() {
-        assert_eq!(split(&["Hallo\n... \nWelt"]), ["Hallo", "Welt"]);
+        assert_eq!(split(&["Hello\n... \nWorld"]), ["Hello", "World"]);
     }
 }

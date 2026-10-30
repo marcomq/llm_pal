@@ -1,8 +1,5 @@
 //! Microphone capture: the cpal callback downmixes to mono and pushes into a lock-free ring.
 
-use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
-
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{BufferSize, Stream, StreamConfig};
 
@@ -14,16 +11,10 @@ pub struct Capture {
     _stream: Stream,
     pub sample_rate: u32,
     pub device_name: String,
-    /// Samples dropped because the worker fell behind.
-    pub overruns: Arc<AtomicUsize>,
 }
 
 fn name_of(dev: &cpal::Device) -> String {
     dev.description().map(|d| d.name().to_string()).unwrap_or_else(|_| "?".into())
-}
-
-pub fn input_device_names() -> Vec<String> {
-    cpal::default_host().input_devices().map(|d| d.map(|d| name_of(&d)).collect()).unwrap_or_default()
 }
 
 /// The input whose name contains `wanted` (case-insensitive), else the default input.
@@ -46,8 +37,6 @@ pub fn start(device: Option<&str>) -> Result<(Capture, rtrb::Consumer<f32>), Err
     let config = StreamConfig { channels, sample_rate, buffer_size: BufferSize::Default };
 
     let (mut tx, rx) = rtrb::RingBuffer::<f32>::new((sample_rate * RING_SECONDS) as usize);
-    let overruns = Arc::new(AtomicUsize::new(0));
-    let overruns_cb = overruns.clone();
     let ch = channels as usize;
     let stream = dev
         .build_input_stream(
@@ -55,9 +44,8 @@ pub fn start(device: Option<&str>) -> Result<(Capture, rtrb::Consumer<f32>), Err
             move |data: &[f32], _: &cpal::InputCallbackInfo| {
                 for frame in data.chunks(ch) {
                     let mono = frame.iter().sum::<f32>() / frame.len() as f32;
-                    if tx.push(mono).is_err() {
-                        overruns_cb.fetch_add(1, Ordering::Relaxed);
-                    }
+                    // A full ring means the worker fell behind; the sample is dropped.
+                    let _ = tx.push(mono);
                 }
             },
             |e| eprintln!("llm_pal: input stream error: {e}"),
@@ -65,5 +53,5 @@ pub fn start(device: Option<&str>) -> Result<(Capture, rtrb::Consumer<f32>), Err
         )
         .map_err(|e| Error::Audio(format!("input stream: {e}")))?;
     stream.play().map_err(|e| Error::Audio(format!("input play: {e}")))?;
-    Ok((Capture { _stream: stream, sample_rate, device_name: name_of(&dev), overruns }, rx))
+    Ok((Capture { _stream: stream, sample_rate, device_name: name_of(&dev) }, rx))
 }

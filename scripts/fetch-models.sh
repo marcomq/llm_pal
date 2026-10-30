@@ -17,7 +17,7 @@ fetch() { # url file sha256
 fetch https://github.com/snakers4/silero-vad/raw/master/src/silero_vad/data/silero_vad.onnx \
     models/silero_vad.onnx 1a153a22f4509e292a94e67d6f9b85e8deb25b4988682b7e174c65279d8788e3
 
-# Whisper base, q8_0 (MIT), German STT.
+# Whisper base, q8_0 (MIT), speech to text.
 fetch https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base-q8_0.bin \
     models/ggml-base-q8_0.bin c577b9a86e7e048a0b7eada054f4dd79a56bbfa911fbdacf900ac5b567cbb7d9
 

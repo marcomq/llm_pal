@@ -1,16 +1,15 @@
-//! Kyutai Pocket TTS in-process: the same voice on every desktop platform. One thread generates, a second one
+//! Kyutai Pocket TTS in-process: the same voice on every platform. One thread generates, a second one
 //! owns the pal-core playback (cpal streams stay on their thread), which also provides the output level.
 
 use std::path::Path;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{Sender, channel, sync_channel};
-use std::sync::{Arc, Mutex};
 
 use pal_core::playback::{Playback, PlaybackState};
 use pal_tts::PocketTts;
 
 use crate::language::Language;
-use crate::speaker::Speaker;
 use crate::{Error, Result};
 
 enum Audio {
@@ -20,7 +19,7 @@ enum Audio {
 }
 
 pub struct PocketSpeaker {
-    tx: Mutex<Sender<(u64, String)>>,
+    tx: Sender<(u64, String)>,
     generation: Arc<AtomicU64>,
     pending: Arc<AtomicUsize>,
     cut: Arc<AtomicBool>,
@@ -31,9 +30,10 @@ impl PocketSpeaker {
     /// `voice` is a Pocket TTS catalog name such as "juergen". Blocks until the model is loaded; the first start
     /// downloads it from Hugging Face.
     pub fn new(voice: &str, language: Language) -> Result<Self> {
-        let tts = PocketTts::load(model_name(language), voice).map_err(|e| Error::Tts(format!("pocket tts: {e:#}")))?;
+        let tts = PocketTts::load(language.profile().pocket_model, voice)
+            .map_err(|e| Error::Tts(format!("pocket tts: {e:#}")))?;
         let rate = tts.sample_rate();
-        let warm_up = tts.synthesize("Hallo.", &AtomicBool::new(false), &mut |_| Ok(()));
+        let warm_up = tts.synthesize(language.profile().warm_up, &AtomicBool::new(false), &mut |_| Ok(()));
         warm_up.map_err(|e| Error::Tts(format!("pocket tts: {e:#}")))?;
         let generation = Arc::new(AtomicU64::new(0));
         let pending = Arc::new(AtomicUsize::new(0));
@@ -55,7 +55,10 @@ impl PocketSpeaker {
                             playback.play(&pcm, rate);
                         }
                     }
-                    Audio::End => drop(p.fetch_sub(1, Ordering::SeqCst)),
+                    Audio::End => {
+                        p.fetch_sub(1, Ordering::SeqCst);
+                        playback.drain();
+                    }
                 }
             }
         });
@@ -78,7 +81,7 @@ impl PocketSpeaker {
                 let _ = audio_tx.send(Audio::End);
             }
         });
-        Ok(Self { tx: Mutex::new(tx), generation, pending, cut, output })
+        Ok(Self { tx, generation, pending, cut, output })
     }
 
     pub fn output(&self) -> Arc<PlaybackState> {
@@ -86,17 +89,10 @@ impl PocketSpeaker {
     }
 }
 
-fn model_name(language: Language) -> &'static str {
-    match language {
-        Language::German => "german",
-        Language::English => "english",
-    }
-}
-
 /// Loads the model files from `dir` instead of Hugging Face, laid out as `<owner>/<repo>/<file>` (see
 /// `build.sh push-models`). False, and nothing changes, if the model for `language` isn't there.
 pub fn use_local_files(dir: &Path, language: Language) -> bool {
-    let repo = dir.join("kyutai/pocket-tts-without-voice-cloning/languages").join(model_name(language));
+    let repo = dir.join("kyutai/pocket-tts-without-voice-cloning/languages").join(language.profile().pocket_model);
     let present = repo.join("model.safetensors").exists();
     if present {
         pal_tts::use_local_files(dir.to_path_buf());
@@ -104,24 +100,22 @@ pub fn use_local_files(dir: &Path, language: Language) -> bool {
     present
 }
 
-impl Speaker for PocketSpeaker {
-    fn say(&mut self, text: &str) -> Result<()> {
+impl PocketSpeaker {
+    /// Queues a sentence and returns at once.
+    pub fn say(&mut self, text: &str) -> Result<()> {
         self.pending.fetch_add(1, Ordering::SeqCst);
         let msg = (self.generation.load(Ordering::SeqCst), text.to_string());
-        self.tx.lock().unwrap().send(msg).map_err(|_| Error::Tts("speech thread stopped".into()))
+        self.tx.send(msg).map_err(|_| Error::Tts("speech thread stopped".into()))
     }
 
-    fn stop(&mut self) {
+    /// Drops the queue and cuts off the current sentence.
+    pub fn stop(&mut self) {
         self.generation.fetch_add(1, Ordering::SeqCst);
         self.cut.store(true, Ordering::SeqCst);
         self.output.stop();
     }
 
-    fn speaking(&self) -> bool {
+    pub fn speaking(&self) -> bool {
         self.pending.load(Ordering::SeqCst) > 0 || self.output.busy()
-    }
-
-    fn level(&self) -> f32 {
-        self.output.level()
     }
 }

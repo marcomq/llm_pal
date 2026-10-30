@@ -15,8 +15,6 @@ const BULB_ON := 0.02
 const BULB_AFTERGLOW := 0.18
 const CENTER_ROWS := 8
 const SIDE_ROWS := 6
-## Preferred system voice per language (macOS names; elsewhere the first voice of the language is the fallback).
-const VOICES := {"de": "Anna", "en": "Samantha"}
 const TEXTS := {
 	"de": {"loading": "lädt Modelle …", "listening": "hört zu", "thinking": "denkt nach", "speaking": "spricht",
 		"stopped": "gestoppt", "error": "Fehler: ", "no_mic": "kein Zugriff aufs Mikrofon"},
@@ -51,10 +49,10 @@ func _ready() -> void:
 	language.text = _lang.to_upper()
 	_apply_mode()
 	pal.failed.connect(func(msg: String) -> void: _error = msg)
-	pal.ready_to_listen.connect(func(device: String) -> void: print("hört zu: ", device))
-	pal.heard.connect(func(text: String) -> void: print("du:  ", text))
+	pal.ready_to_listen.connect(func(device: String) -> void: print("listening: ", device))
+	pal.heard.connect(func(text: String) -> void: print("you: ", text))
 	pal.said.connect(func(sentence: String) -> void: print("pal: ", sentence))
-	pal.turn_done.connect(func(stt_ms: int, ms: int) -> void: print("     Text nach %d ms, erster Satz nach %d ms" % [stt_ms, ms]))
+	pal.turn_done.connect(func(stt_ms: int, ms: int) -> void: print("     text after %d ms, first sentence after %d ms" % [stt_ms, ms]))
 	if OS.get_name() != "Android":
 		_start()
 	else:
@@ -78,7 +76,6 @@ func _start() -> void:
 		DirAccess.make_dir_recursive_absolute(ANDROID_MODELS)
 	_error = ""
 	pal.language = _lang
-	pal.voice = VOICES[_lang]
 	pal.start(_model_dir(), _stt_library())
 
 

@@ -207,10 +207,6 @@ impl Processor {
     pub fn device_name(&self) -> &str {
         &self.capture.device_name
     }
-
-    pub fn overruns(&self) -> usize {
-        self.capture.overruns.load(Ordering::Relaxed)
-    }
 }
 
 impl Drop for Processor {
@@ -222,7 +218,13 @@ impl Drop for Processor {
     }
 }
 
-fn worker(mut core: Core, mut ring: rtrb::Consumer<f32>, tx: Sender<Event>, stop: Arc<AtomicBool>, live: Arc<AtomicBool>) {
+fn worker(
+    mut core: Core,
+    mut ring: rtrb::Consumer<f32>,
+    tx: Sender<Event>,
+    stop: Arc<AtomicBool>,
+    live: Arc<AtomicBool>,
+) {
     let mut buf = Vec::with_capacity(TARGET_RATE as usize);
     let mut emit = |e| {
         let _ = tx.send(e);

@@ -1,4 +1,4 @@
-//! Turns segment prosody into short tags (German, or English via `format_in`) for the LLM prompt, relative to the speaker's running baseline.
+//! Turns segment prosody into short tags for the LLM prompt, relative to the speaker's running baseline.
 
 use pal_core::Features;
 
@@ -15,6 +15,20 @@ const ALPHA: f32 = 0.3;
 /// Relative tags start after this many segments.
 const WARMUP: u32 = 2;
 
+/// The order of `Profile::tags`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Tag {
+    Question,
+    VeryShort,
+    Long,
+    Loud,
+    Quiet,
+    HighVoice,
+    LowVoice,
+    Fast,
+    Slow,
+}
+
 #[derive(Clone, Default)]
 pub struct ProsodyTags {
     seen: u32,
@@ -25,26 +39,26 @@ pub struct ProsodyTags {
 
 impl ProsodyTags {
     /// Tags for this segment, then folds it into the baseline.
-    pub fn tag(&mut self, f: &Features) -> Vec<&'static str> {
+    pub fn tag(&mut self, f: &Features) -> Vec<Tag> {
         let mut tags = Vec::new();
         if f.f0_slope_st_per_s.is_some_and(|s| s >= QUESTION_ST_PER_S) {
-            tags.push("Frage");
+            tags.push(Tag::Question);
         }
         if f.duration_s < SHORT_S {
-            tags.push("sehr kurz");
+            tags.push(Tag::VeryShort);
         } else if f.duration_s > LONG_S {
-            tags.push("lang");
+            tags.push(Tag::Long);
         }
         if self.seen >= WARMUP {
             let d = f.rms_mean_db - self.rms_db;
-            tags.extend((d >= LOUDNESS_DB).then_some("laut").or((d <= -LOUDNESS_DB).then_some("leise")));
+            tags.extend((d >= LOUDNESS_DB).then_some(Tag::Loud).or((d <= -LOUDNESS_DB).then_some(Tag::Quiet)));
             if let (Some(f0), Some(base)) = (f.f0_median_hz, self.f0_hz) {
                 let st = 12.0 * (f0 / base).log2();
-                tags.extend((st >= PITCH_ST).then_some("hohe Stimme").or((st <= -PITCH_ST).then_some("tiefe Stimme")));
+                tags.extend((st >= PITCH_ST).then_some(Tag::HighVoice).or((st <= -PITCH_ST).then_some(Tag::LowVoice)));
             }
             if self.rate > 0.0 {
                 let r = f.syllable_rate / self.rate;
-                tags.extend((r >= RATE_FACTOR).then_some("schnell").or((r <= 1.0 / RATE_FACTOR).then_some("langsam")));
+                tags.extend((r >= RATE_FACTOR).then_some(Tag::Fast).or((r <= 1.0 / RATE_FACTOR).then_some(Tag::Slow)));
             }
         }
         self.update(f);
@@ -63,32 +77,10 @@ impl ProsodyTags {
     }
 }
 
-/// "[Frage] [laut]", empty without tags.
-pub fn format(tags: &[&str]) -> String {
-    tags.iter().map(|t| format!("[{t}]")).collect::<Vec<_>>().join(" ")
-}
-
-/// Like `format`, with the tags translated for `language`.
-pub fn format_in(tags: &[&str], language: Language) -> String {
-    match language {
-        Language::German => format(tags),
-        Language::English => format(&tags.iter().map(|t| english(t)).collect::<Vec<_>>()),
-    }
-}
-
-fn english(tag: &str) -> &str {
-    match tag {
-        "Frage" => "question",
-        "sehr kurz" => "very short",
-        "lang" => "long",
-        "laut" => "loud",
-        "leise" => "quiet",
-        "hohe Stimme" => "high voice",
-        "tiefe Stimme" => "low voice",
-        "schnell" => "fast",
-        "langsam" => "slow",
-        other => other,
-    }
+/// Such as "[question] [loud]" in `language`, empty without tags.
+pub fn format(tags: &[Tag], language: Language) -> String {
+    let names = &language.profile().tags;
+    tags.iter().map(|&t| format!("[{}]", names[t as usize])).collect::<Vec<_>>().join(" ")
 }
 
 #[cfg(test)]
@@ -109,7 +101,7 @@ mod tests {
     #[test]
     fn question_is_tagged_from_the_first_segment() {
         let mut t = ProsodyTags::default();
-        assert_eq!(t.tag(&feat(-25.0, 150.0, 4.0, 3.8)), ["Frage"]);
+        assert_eq!(t.tag(&feat(-25.0, 150.0, 4.0, 3.8)), [Tag::Question]);
         assert!(t.tag(&feat(-25.0, 150.0, 4.0, -19.0)).is_empty());
     }
 
@@ -122,16 +114,17 @@ mod tests {
         for _ in 0..5 {
             t.tag(&normal);
         }
-        assert_eq!(t.tag(&excited), ["laut", "hohe Stimme", "schnell"]);
-        assert_eq!(t.tag(&feat(-40.0, 110.0, 2.0, -5.0)), ["leise", "tiefe Stimme", "langsam"]);
+        assert_eq!(t.tag(&excited), [Tag::Loud, Tag::HighVoice, Tag::Fast]);
+        assert_eq!(t.tag(&feat(-40.0, 110.0, 2.0, -5.0)), [Tag::Quiet, Tag::LowVoice, Tag::Slow]);
     }
 
     #[test]
     fn duration_and_format() {
         let mut t = ProsodyTags::default();
         let tags = t.tag(&Features { duration_s: 0.5, ..Default::default() });
-        assert_eq!(format(&tags), "[sehr kurz]");
-        assert_eq!(format(&[]), "");
-        assert_eq!(format_in(&["Frage", "laut"], Language::English), "[question] [loud]");
+        assert_eq!(format(&tags, Language::English), "[very short]");
+        assert_eq!(format(&[], Language::English), "");
+        assert_eq!(format(&[Tag::Question, Tag::Loud], Language::English), "[question] [loud]");
+        assert_eq!(format(&[Tag::Question, Tag::Loud], Language::German), "[Frage] [laut]");
     }
 }
