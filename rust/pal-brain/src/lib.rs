@@ -2,6 +2,7 @@
 
 pub mod agent;
 pub mod language;
+pub mod leveler;
 pub mod llm;
 pub mod numbers;
 pub mod persona;
@@ -9,6 +10,7 @@ pub mod pocket_speaker;
 pub mod prosody_tags;
 pub mod sentences;
 pub mod stt;
+pub mod voice_filter;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {

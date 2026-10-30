@@ -27,6 +27,9 @@ pub struct PalNode {
     /// Speech during output stops it (needs headphones).
     #[export]
     barge_in: bool,
+    /// GGUF file name in the model dir; takes effect on `start`.
+    #[export]
+    llm_model: GString,
     base: Base<Node>,
 }
 
@@ -40,6 +43,7 @@ impl INode for PalNode {
             pocket_voice: "juergen".into(),
             language: "de".into(),
             barge_in: false,
+            llm_model: "Qwen3.5-0.8B-Q4_K_M.gguf".into(),
             base,
         }
     }
@@ -124,8 +128,8 @@ impl PalNode {
             vad_model: dir.join("silero_vad.onnx"),
             device: None,
             stt_library: stt_library.to_string().into(),
-            stt_model: dir.join("ggml-base-q8_0.bin"),
-            llm_model: dir.join("Qwen3.5-0.8B-Q4_K_M.gguf"),
+            stt_model: dir.join("ggml-small-q5_1.bin"),
+            llm_model: dir.join(self.llm_model.to_string()),
             voice: self.pocket_voice.to_string(),
             barge_in: self.barge_in,
             language,
@@ -148,6 +152,12 @@ impl PalNode {
             return State::Loading as i32;
         }
         self.agent.as_ref().map_or(State::Stopped, Agent::state) as i32
+    }
+
+    /// True while the user's speech is heard.
+    #[func]
+    fn hearing(&self) -> bool {
+        self.agent.as_ref().is_some_and(Agent::hearing)
     }
 
     /// Level of Pal's voice, 0..1.

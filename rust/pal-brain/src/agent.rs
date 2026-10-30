@@ -74,6 +74,7 @@ struct Shared {
     state: AtomicU8,
     quit: AtomicBool,
     output: OnceLock<Arc<PlaybackState>>,
+    hearing: OnceLock<Arc<AtomicBool>>,
 }
 
 impl Shared {
@@ -125,6 +126,11 @@ impl Agent {
     /// Level of Pal's voice, 0..1.
     pub fn level(&self) -> f32 {
         self.shared.output.get().map_or(0.0, |o| o.level())
+    }
+
+    /// True while the user's speech is heard.
+    pub fn hearing(&self) -> bool {
+        self.shared.hearing.get().is_some_and(|h| h.load(Ordering::Relaxed))
     }
 
     pub fn poll(&self) -> Option<AgentEvent> {
@@ -208,6 +214,7 @@ fn converse(cfg: &AgentConfig, shared: &Shared, tx: &Sender<AgentEvent>) -> Resu
     warm_up(&mut stt, &mut llm, &persona)?;
     let (processor, events) = Processor::start(&pcfg)?;
     let active = processor.output_active();
+    let _ = shared.hearing.set(processor.in_speech());
     if !processor.wait_live(LIVE_TIMEOUT) {
         eprintln!("llm_pal: no sound from '{}' yet", processor.device_name());
     }

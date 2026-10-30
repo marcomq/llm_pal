@@ -21,9 +21,9 @@ scripts/         fetch-models.sh (Silero, Whisper, Qwen; sha256-checked), make-t
 ```sh
 ./build.sh setup         # models and a test recording
 ./build.sh test          # all tests, including the ones that need the models
-./build.sh godot         # Pal with the Godot display (models from models/ or $PAL_MODELS)
+./build.sh godot         # Pal with the Godot display (models from models/ or $PAL_MODELS; $PAL_LLM picks the GGUF)
 ./build.sh install       # build the arm64 Android APK and install it with adb
-./build.sh push-models   # copy the models to the phone (once, about 600 MB)
+./build.sh push-models   # copy the models to the phone (once, about 700 MB)
 ```
 
 On the Mac, Pocket TTS downloads its model and voice into the Hugging Face cache on first start. Android builds have

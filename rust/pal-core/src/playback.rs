@@ -12,6 +12,8 @@ use crate::Error;
 const RING_SECONDS: u32 = 30;
 /// Audio queued before output (re)starts, so a TTS barely faster than real time doesn't run dry and click.
 const PREROLL_MS: u32 = 200;
+/// If the queue still runs dry, its last samples fade out and the next ones fade in, instead of a click.
+const FADE_MS: u32 = 5;
 
 /// State shared between the callback, the feeding thread and readers such as the UI.
 #[derive(Default)]
@@ -65,6 +67,8 @@ impl Playback {
         let st = state.clone();
         let preroll = (sample_rate * PREROLL_MS / 1000) as usize;
         let mut primed = false;
+        let fade = (sample_rate * FADE_MS / 1000).max(1) as f32;
+        let mut envelope = 0.0f32;
         let stream = dev
             .build_output_stream(
                 config,
@@ -76,10 +80,18 @@ impl Playback {
                         }
                     }
                     let queued = rx.slots();
-                    primed = queued > 0 && (primed || queued >= preroll || st.draining.load(Ordering::Relaxed));
+                    let draining = st.draining.load(Ordering::Relaxed);
+                    primed = queued > 0 && (primed || queued >= preroll || draining);
                     let mut sum = 0.0;
                     for frame in out.chunks_mut(channels) {
-                        let s = if primed { rx.pop().unwrap_or(0.0) } else { 0.0 };
+                        let mut s = 0.0;
+                        if primed {
+                            let left = if draining { f32::INFINITY } else { rx.slots() as f32 };
+                            envelope = (envelope + 1.0 / fade).min(left / fade).min(1.0);
+                            s = rx.pop().unwrap_or(0.0) * envelope;
+                        } else {
+                            envelope = 0.0;
+                        }
                         sum += s * s;
                         frame.fill(s);
                     }

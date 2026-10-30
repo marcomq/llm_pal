@@ -32,6 +32,9 @@ fn max_tokens(samples: usize) -> i32 {
 
 impl PalStt {
     fn new(model: &str) -> Result<Self, String> {
+        if !std::path::Path::new(model).is_file() {
+            return Err(format!("no whisper model at {model}"));
+        }
         whisper_rs::install_logging_hooks();
         let ctx =
             WhisperContext::new_with_params(model, WhisperContextParameters::default()).map_err(|e| e.to_string())?;

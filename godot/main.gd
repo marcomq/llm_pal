@@ -6,8 +6,8 @@ const SETTINGS_PATH := "user://settings.cfg"
 const RECORD_AUDIO := "android.permission.RECORD_AUDIO"
 ## Must match package/unique_name in export_presets.cfg; models go to this app's folder (adb push).
 const ANDROID_MODELS := "/storage/emulated/0/Android/data/io.github.marcomq.llmpal/files/models"
-## Speech RMS rarely exceeds 0.15; this maps it to 0..1.
-const LEVEL_GAIN := 7.0
+## Pal's voice is levelled to about 0.1 RMS; this maps it to 0..1.
+const LEVEL_GAIN := 5.0
 const ATTACK := 30.0
 const RELEASE := 15.0
 ## Bulbs light up fast and glow after for about this long (seconds to 1/e).
@@ -54,11 +54,22 @@ func _ready() -> void:
 	pal.said.connect(func(sentence: String) -> void: print("pal: ", sentence))
 	pal.turn_done.connect(func(stt_ms: int, ms: int) -> void: print("     text after %d ms, first sentence after %d ms" % [stt_ms, ms]))
 	if OS.get_name() != "Android":
+		_fit_window()
 		_start()
 	else:
 		get_tree().on_request_permissions_result.connect(_on_permission_result)
 		if OS.request_permission(RECORD_AUDIO):
 			_start()
+
+
+## Desktop: 9:16 at 90 % of the usable screen height, centred.
+func _fit_window() -> void:
+	var screen := DisplayServer.window_get_current_screen()
+	var usable := DisplayServer.screen_get_usable_rect(screen)
+	var height := int(usable.size.y * 0.9)
+	var window := Vector2i(height * 9 / 16, height)
+	DisplayServer.window_set_size(window)
+	DisplayServer.window_set_position(usable.position + (usable.size - window) / 2)
 
 
 func _on_permission_result(permission: String, granted: bool) -> void:
@@ -76,6 +87,9 @@ func _start() -> void:
 		DirAccess.make_dir_recursive_absolute(ANDROID_MODELS)
 	_error = ""
 	pal.language = _lang
+	var llm := OS.get_environment("PAL_LLM")
+	if not llm.is_empty():
+		pal.llm_model = llm
 	pal.start(_model_dir(), _stt_library())
 
 
@@ -137,7 +151,7 @@ func _state_text(state: int) -> String:
 		PalNode.LOADING:
 			key = "loading"
 		PalNode.LISTENING:
-			key = "listening"
+			return TEXTS[_lang]["listening"] + (" •" if pal.hearing() else "")
 		PalNode.THINKING:
 			key = "thinking"
 		PalNode.SPEAKING:

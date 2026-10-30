@@ -10,6 +10,8 @@ use pal_core::playback::{Playback, PlaybackState};
 use pal_tts::PocketTts;
 
 use crate::language::Language;
+use crate::leveler::Leveler;
+use crate::voice_filter::VoiceFilter;
 use crate::{Error, Result};
 
 enum Audio {
@@ -67,12 +69,14 @@ impl PocketSpeaker {
         let (tx, rx) = channel::<(u64, String)>();
         let (g, c) = (generation.clone(), cut.clone());
         std::thread::spawn(move || {
+            let mut leveler = Leveler::default();
+            let mut filter = VoiceFilter::new(rate);
             for (gen_of_text, text) in rx {
                 if gen_of_text == g.load(Ordering::SeqCst) {
                     c.store(false, Ordering::SeqCst);
                     let audio_tx = audio_tx.clone();
                     let result = tts.synthesize(&text, &c, &mut |pcm| {
-                        audio_tx.send(Audio::Chunk(gen_of_text, pcm.to_vec())).map_err(Into::into)
+                        audio_tx.send(Audio::Chunk(gen_of_text, leveler.apply(&filter.apply(pcm)))).map_err(Into::into)
                     });
                     if let Err(e) = result {
                         eprintln!("llm_pal: pocket tts: {e:#}");

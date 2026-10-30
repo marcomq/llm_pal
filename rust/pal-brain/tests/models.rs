@@ -39,7 +39,7 @@ fn segments() -> Vec<Segment> {
 #[test]
 #[ignore = "needs models/ and testdata/"]
 fn whisper_understands_the_test_sentences() {
-    let mut stt = Stt::new(&pal_brain::stt::default_library(), &root().join("models/ggml-base-q8_0.bin")).unwrap();
+    let mut stt = Stt::new(&pal_brain::stt::default_library(), &root().join("models/ggml-small-q5_1.bin")).unwrap();
     let expected = [&["hallo", "teste"][..], &["zweite", "satz"], &["hörst", "mich"]];
     let segs = segments();
     assert_eq!(segs.len(), expected.len());
@@ -57,7 +57,7 @@ fn whisper_understands_the_test_sentences() {
 #[test]
 #[ignore = "needs models/ and testdata/"]
 fn llm_comments_on_transcripts_and_stops_when_cancelled() {
-    let mut stt = Stt::new(&pal_brain::stt::default_library(), &root().join("models/ggml-base-q8_0.bin")).unwrap();
+    let mut stt = Stt::new(&pal_brain::stt::default_library(), &root().join("models/ggml-small-q5_1.bin")).unwrap();
     let t = Instant::now();
     let model = LocalLlm::new(&root().join("models/Qwen3.5-0.8B-Q4_K_M.gguf"), LlmConfig::default()).unwrap();
     let mut llm = model.session().unwrap();

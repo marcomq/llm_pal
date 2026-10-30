@@ -41,7 +41,7 @@ build_android() {
     (cd godot && "$GODOT" --headless --import && "$GODOT" --headless --export-debug Android)
 }
 
-# The models stay out of the APK (about 600 MB); the app reads them from its own folder.
+# The models stay out of the APK (about 700 MB); the app reads them from its own folder.
 # The app must create that folder (start it once): files in a folder made by adb stay unreadable for the app.
 push_models() {
     dir="/sdcard/Android/data/$PACKAGE/files/models"
@@ -49,7 +49,7 @@ push_models() {
         echo "start the app once first, it creates $dir" >&2
         exit 1
     fi
-    for f in silero_vad.onnx ggml-base-q8_0.bin Qwen3.5-0.8B-Q4_K_M.gguf; do
+    for f in silero_vad.onnx ggml-small-q5_1.bin Qwen3.5-0.8B-Q4_K_M.gguf; do
         adb push "models/$f" "$dir/"
     done
     push_pocket "$dir/pocket"

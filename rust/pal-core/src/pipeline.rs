@@ -41,6 +41,7 @@ struct Core {
     outs: Vec<SegOut>,
     next_id: u64,
     output_active: Arc<AtomicBool>,
+    in_speech: Arc<AtomicBool>,
     drop_echo: bool,
     /// Sample position (16 kHz) until which input counts as overlapping the output.
     output_until: u64,
@@ -49,7 +50,12 @@ struct Core {
 }
 
 impl Core {
-    fn new(cfg: &ProcessorConfig, rate: u32, output_active: Arc<AtomicBool>) -> Result<Self, Error> {
+    fn new(
+        cfg: &ProcessorConfig,
+        rate: u32,
+        output_active: Arc<AtomicBool>,
+        in_speech: Arc<AtomicBool>,
+    ) -> Result<Self, Error> {
         Ok(Self {
             resampler: Resampler16k::new(rate)?,
             vad: SileroVad::new(&cfg.vad_model)?,
@@ -58,6 +64,7 @@ impl Core {
             outs: Vec::new(),
             next_id: 1,
             output_active,
+            in_speech,
             drop_echo: cfg.drop_echo,
             output_until: 0,
             pos: 0,
@@ -97,6 +104,7 @@ impl Core {
             self.segmenter.push(chunk, prob, &mut self.outs);
             self.drain_outs(emit);
             self.during_output |= self.segmenter.in_speech() && output;
+            self.in_speech.store(self.segmenter.in_speech(), Ordering::Relaxed);
         }
         self.pending.drain(..whole);
         Ok(())
@@ -149,7 +157,7 @@ impl Core {
 
 /// Runs the whole chain over a recording. Deterministic; for tests and the `file` command.
 pub fn process_samples(cfg: &ProcessorConfig, samples: &[f32], rate: u32) -> Result<Vec<Event>, Error> {
-    let mut core = Core::new(cfg, rate, Arc::new(AtomicBool::new(false)))?;
+    let mut core = Core::new(cfg, rate, Arc::new(AtomicBool::new(false)), Arc::new(AtomicBool::new(false)))?;
     let mut events = Vec::new();
     let mut emit = |e| events.push(e);
     core.feed(samples, &mut emit)?;
@@ -163,6 +171,7 @@ pub struct Processor {
     stop: Arc<AtomicBool>,
     worker: Option<JoinHandle<()>>,
     output_active: Arc<AtomicBool>,
+    in_speech: Arc<AtomicBool>,
     live: Arc<AtomicBool>,
 }
 
@@ -170,7 +179,8 @@ impl Processor {
     pub fn start(cfg: &ProcessorConfig) -> Result<(Self, Receiver<Event>), Error> {
         let (capture, ring) = capture::start(cfg.device.as_deref())?;
         let output_active = Arc::new(AtomicBool::new(false));
-        let core = Core::new(cfg, capture.sample_rate, output_active.clone())?;
+        let in_speech = Arc::new(AtomicBool::new(false));
+        let core = Core::new(cfg, capture.sample_rate, output_active.clone(), in_speech.clone())?;
         let stop = Arc::new(AtomicBool::new(false));
         let (tx, rx) = crossbeam_channel::unbounded();
         let live = Arc::new(AtomicBool::new(false));
@@ -179,7 +189,7 @@ impl Processor {
             .name("pal-audio".into())
             .spawn(move || worker(core, ring, tx, stop_w, live_w))
             .map_err(|e| Error::Audio(format!("worker thread: {e}")))?;
-        Ok((Self { capture, stop, worker: Some(worker), output_active, live }, rx))
+        Ok((Self { capture, stop, worker: Some(worker), output_active, in_speech, live }, rx))
     }
 
     /// Waits until the microphone delivers sound, not just the digital silence some devices (e.g. Bluetooth
@@ -198,6 +208,11 @@ impl Processor {
     /// Set while the app plays audio; speech starting meanwhile also emits `Event::BargeIn`.
     pub fn output_active(&self) -> Arc<AtomicBool> {
         self.output_active.clone()
+    }
+
+    /// Set while the VAD hears speech.
+    pub fn in_speech(&self) -> Arc<AtomicBool> {
+        self.in_speech.clone()
     }
 
     pub fn sample_rate(&self) -> u32 {
