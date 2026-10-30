@@ -9,7 +9,7 @@ use pal_brain::language::Language;
 use pal_brain::llm::{Llm, LlmConfig, LocalLlm};
 use pal_brain::persona::Persona;
 use pal_brain::prosody_tags::{self, ProsodyTags};
-use pal_brain::stt::Stt;
+use pal_brain::stt::{Recognizer, Stt};
 use pal_core::{Event, ProcessorConfig, Segment, SegmenterConfig, process_samples};
 
 fn root() -> PathBuf {
@@ -25,6 +25,7 @@ fn segments() -> Vec<Segment> {
         segmenter: SegmenterConfig::default(),
         device: None,
         drop_echo: false,
+        turn_model: None,
     };
     process_samples(&cfg, &samples, rate)
         .unwrap()
@@ -53,13 +54,29 @@ fn whisper_understands_the_test_sentences() {
     assert_eq!(stt.transcribe(&vec![0.0; 16_000]).unwrap(), "", "silence gives no text");
 }
 
+#[test]
+#[ignore = "needs models/ (with PARAKEET=1) and testdata/"]
+fn parakeet_understands_the_test_sentences() {
+    let model = root().join("models/parakeet-tdt-0.6b-v3");
+    let mut stt = Recognizer::new(&pal_brain::stt::default_library(), &model, "de").unwrap();
+    let expected = [&["hallo", "teste"][..], &["zweite", "satz"], &["hörst", "mich"]];
+    for (seg, words) in segments().iter().zip(expected) {
+        let t = Instant::now();
+        let text = stt.transcribe(&seg.pcm).unwrap();
+        eprintln!("{:.2} s audio -> {} ms: {text}", seg.features.duration_s, t.elapsed().as_millis());
+        let lower = text.to_lowercase();
+        assert!(words.iter().all(|w| lower.contains(w)), "{text:?} lacks {words:?}");
+    }
+    assert_eq!(stt.transcribe(&vec![0.0; 16_000]).unwrap(), "", "silence gives no text");
+}
+
 /// STT and LLM in one process (both bundle ggml), through the whole comment chain, plus cancellation.
 #[test]
 #[ignore = "needs models/ and testdata/"]
 fn llm_comments_on_transcripts_and_stops_when_cancelled() {
     let mut stt = Stt::new(&pal_brain::stt::default_library(), &root().join("models/ggml-small-q5_1.bin")).unwrap();
     let t = Instant::now();
-    let model = LocalLlm::new(&root().join("models/Qwen3.5-0.8B-Q4_K_M.gguf"), LlmConfig::default()).unwrap();
+    let model = LocalLlm::new(&root().join("models/Qwen3.5-2B-Q4_K_M.gguf"), LlmConfig::default()).unwrap();
     let mut llm = model.session().unwrap();
     eprintln!("llm load {} ms", t.elapsed().as_millis());
     let mut persona = Persona::kitt(Language::German);

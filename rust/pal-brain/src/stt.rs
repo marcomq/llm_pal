@@ -5,6 +5,7 @@ use std::ffi::{CStr, CString, c_char};
 use std::path::{Path, PathBuf};
 
 use libloading::Library;
+use parakeet_rs::{ExecutionConfig, ParakeetTDT, Transcriber};
 
 use crate::{Error, Result};
 
@@ -100,6 +101,39 @@ unsafe fn take_error(free_string: FreeStringFn, e: *mut c_char) -> Error {
     let msg = unsafe { CStr::from_ptr(e) }.to_string_lossy().into_owned();
     unsafe { free_string(e) };
     err(msg)
+}
+
+/// Whisper through libpal_stt for a `.bin` model, otherwise Parakeet TDT from a model folder.
+pub enum Recognizer {
+    Whisper(Stt),
+    Parakeet(Box<ParakeetTDT>),
+}
+
+impl Recognizer {
+    /// `language` is an ISO 639-1 code; Parakeet ignores it and detects the language itself.
+    pub fn new(library: &Path, model: &Path, language: &str) -> Result<Self> {
+        if model.extension().is_some_and(|e| e == "bin") {
+            let mut stt = Stt::new(library, model)?;
+            stt.set_language(language)?;
+            return Ok(Self::Whisper(stt));
+        }
+        let threads = std::thread::available_parallelism().map_or(4, |n| n.get().min(4));
+        let config =
+            ExecutionConfig::new().with_environment(pal_core::vad::environment()?.clone()).with_intra_threads(threads);
+        let parakeet =
+            ParakeetTDT::from_pretrained(model, Some(config)).map_err(|e| err(format!("{}: {e}", model.display())))?;
+        Ok(Self::Parakeet(Box::new(parakeet)))
+    }
+
+    /// Text of 16 kHz mono speech, empty if nothing was understood.
+    pub fn transcribe(&mut self, pcm: &[f32]) -> Result<String> {
+        match self {
+            Self::Whisper(stt) => stt.transcribe(pcm),
+            Self::Parakeet(p) => {
+                Ok(p.transcribe_samples(pcm.to_vec(), 16_000, 1, None).map_err(err)?.text.trim().to_string())
+            }
+        }
+    }
 }
 
 impl Drop for Stt {

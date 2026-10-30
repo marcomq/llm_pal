@@ -9,6 +9,8 @@ pal-core.workspace = true
 libloading = "0.9"
 llama-cpp-2 = "0.1.160"
 thiserror = "2"
+hound = "3.5.1"
+parakeet-rs = { version = "0.4.3", default-features = false, features = ["cpu"] }
 pal-tts = { path = "../pal-tts" }
 
 # Android has no TLS setup for the downloader; `push-models` copies the files there.
@@ -16,5 +18,4 @@ pal-tts = { path = "../pal-tts" }
 pal-tts = { path = "../pal-tts", features = ["download"] }
 
 [dev-dependencies]
-hound = "3.5.1"
 

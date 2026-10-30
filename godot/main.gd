@@ -1,6 +1,7 @@
 extends Control
 ## Pal's display: KITT's voice box or HAL's eye, reacting only to Pal's own voice. Space or a tap on the KITT/HAL
 ## label top left switches; L or a tap on the DE/EN label top right switches the language and restarts Pal.
+## S or a tap on the status line switches speech recognition between Whisper and Parakeet and restarts Pal.
 
 const SETTINGS_PATH := "user://settings.cfg"
 const RECORD_AUDIO := "android.permission.RECORD_AUDIO"
@@ -13,6 +14,8 @@ const RELEASE := 15.0
 ## Bulbs light up fast and glow after for about this long (seconds to 1/e).
 const BULB_ON := 0.02
 const BULB_AFTERGLOW := 0.18
+## Speech recognition models in the model dir; Parakeet comes from `PARAKEET=1 sh scripts/fetch-models.sh`.
+const STT_MODELS := {"whisper": "ggml-small-q5_1.bin", "parakeet": "parakeet-tdt-0.6b-v3"}
 const CENTER_ROWS := 8
 const SIDE_ROWS := 6
 const TEXTS := {
@@ -32,6 +35,7 @@ const TEXTS := {
 var _cfg := ConfigFile.new()
 var _hal := false
 var _lang := "de"
+var _stt := "whisper"
 var _level := 0.0
 var _phase := 0.0
 var _think := 0.0
@@ -46,6 +50,7 @@ func _ready() -> void:
 	_cfg.load(SETTINGS_PATH)
 	_hal = _cfg.get_value("display", "hal", false)
 	_lang = _cfg.get_value("display", "language", "de")
+	_stt = _cfg.get_value("speech", "stt", "whisper")
 	language.text = _lang.to_upper()
 	_apply_mode()
 	pal.failed.connect(func(msg: String) -> void: _error = msg)
@@ -87,9 +92,12 @@ func _start() -> void:
 		DirAccess.make_dir_recursive_absolute(ANDROID_MODELS)
 	_error = ""
 	pal.language = _lang
+	pal.stt_model = STT_MODELS[_stt]
 	var llm := OS.get_environment("PAL_LLM")
 	if not llm.is_empty():
 		pal.llm_model = llm
+	pal.smart_turn = OS.get_environment("PAL_SMART_TURN") != "0"
+	pal.barge_in = OS.get_environment("PAL_BARGE_IN") != "0"
 	pal.start(_model_dir(), _stt_library())
 
 
@@ -151,7 +159,7 @@ func _state_text(state: int) -> String:
 		PalNode.LOADING:
 			key = "loading"
 		PalNode.LISTENING:
-			return TEXTS[_lang]["listening"] + (" •" if pal.hearing() else "")
+			return TEXTS[_lang]["listening"] + " · " + _stt + (" •" if pal.hearing() else "")
 		PalNode.THINKING:
 			key = "thinking"
 		PalNode.SPEAKING:
@@ -172,6 +180,8 @@ func _input(event: InputEvent) -> void:
 		_apply_mode()
 		_cfg.set_value("display", "hal", _hal)
 		_cfg.save(SETTINGS_PATH)
+	elif (pressed_key and key.keycode == KEY_S) or (tapped and status.get_global_rect().has_point(click.position)):
+		_switch_stt()
 
 
 func _switch_language() -> void:
@@ -179,6 +189,17 @@ func _switch_language() -> void:
 	language.text = _lang.to_upper()
 	_cfg.set_value("display", "language", _lang)
 	_cfg.save(SETTINGS_PATH)
+	_restart()
+
+
+func _switch_stt() -> void:
+	_stt = "parakeet" if _stt == "whisper" else "whisper"
+	_cfg.set_value("speech", "stt", _stt)
+	_cfg.save(SETTINGS_PATH)
+	_restart()
+
+
+func _restart() -> void:
 	if OS.get_name() == "Android" and not OS.get_granted_permissions().has(RECORD_AUDIO):
 		_error = TEXTS[_lang]["no_mic"]
 		return

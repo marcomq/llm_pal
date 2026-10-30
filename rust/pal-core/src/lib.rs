@@ -6,12 +6,14 @@
 #[cfg(target_os = "android")]
 mod android;
 pub mod capture;
+pub mod echo;
 pub mod event;
 pub mod pipeline;
 pub mod playback;
 pub mod prosody;
 pub mod resample;
 pub mod segmenter;
+pub mod turn;
 pub mod vad;
 
 pub use event::{Event, Features, Segment};
@@ -24,6 +26,8 @@ pub enum Error {
     Resample(String),
     #[error("VAD: {0}")]
     Vad(String),
+    #[error("Smart Turn: {0}")]
+    Turn(String),
     #[error("audio: {0}")]
     Audio(String),
 }

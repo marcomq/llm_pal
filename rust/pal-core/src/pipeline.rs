@@ -9,9 +9,11 @@ use std::time::{Duration, Instant};
 use crossbeam_channel::{Receiver, Sender};
 
 use crate::capture::{self, Capture};
+use crate::echo::{EchoCanceller, EchoReference};
 use crate::event::{Event, Segment};
 use crate::resample::{Resampler16k, TARGET_RATE};
 use crate::segmenter::{SegOut, Segmenter, SegmenterConfig};
+use crate::turn::{self, SmartTurn};
 use crate::vad::{self, SileroVad};
 use crate::{Error, prosody};
 
@@ -24,6 +26,8 @@ pub struct ProcessorConfig {
     /// When the output stops, speech that began during it is dropped: without barge-in it is Pal's own echo, and
     /// the user's next words would otherwise join it.
     pub drop_echo: bool,
+    /// Smart Turn model: at a pause, a finished turn ends the segment at once instead of after `end_silence_ms`.
+    pub turn_model: Option<PathBuf>,
 }
 
 /// Pal's voice still echoes in the room this long after the output stopped.
@@ -35,7 +39,12 @@ fn ms(samples: u64) -> u64 {
 
 struct Core {
     resampler: Resampler16k,
+    echo: Option<EchoCanceller>,
+    resampled: Vec<f32>,
     vad: SileroVad,
+    turn: Option<SmartTurn>,
+    /// The next `Done` comes from Smart Turn.
+    turn_ended: bool,
     segmenter: Segmenter,
     pending: Vec<f32>,
     outs: Vec<SegOut>,
@@ -55,10 +64,15 @@ impl Core {
         rate: u32,
         output_active: Arc<AtomicBool>,
         in_speech: Arc<AtomicBool>,
+        echo: Option<EchoReference>,
     ) -> Result<Self, Error> {
         Ok(Self {
             resampler: Resampler16k::new(rate)?,
+            echo: echo.map(EchoCanceller::new).transpose()?,
+            resampled: Vec::new(),
             vad: SileroVad::new(&cfg.vad_model)?,
+            turn: cfg.turn_model.as_deref().map(SmartTurn::new).transpose()?,
+            turn_ended: false,
             segmenter: Segmenter::new(cfg.segmenter.clone()),
             pending: Vec::with_capacity(TARGET_RATE as usize),
             outs: Vec::new(),
@@ -74,7 +88,14 @@ impl Core {
 
     /// Mono samples at the input rate.
     fn feed(&mut self, input: &[f32], emit: &mut impl FnMut(Event)) -> Result<(), Error> {
-        self.resampler.push(input, &mut self.pending)?;
+        match &mut self.echo {
+            Some(echo) => {
+                self.resampler.push(input, &mut self.resampled)?;
+                echo.process(&self.resampled, &mut self.pending)?;
+                self.resampled.clear();
+            }
+            None => self.resampler.push(input, &mut self.pending)?,
+        }
         self.run_chunks(emit)
     }
 
@@ -112,24 +133,57 @@ impl Core {
 
     fn drain_outs(&mut self, emit: &mut impl FnMut(Event)) {
         let mut outs = std::mem::take(&mut self.outs);
-        for out in outs.drain(..) {
-            match out {
-                SegOut::Start { at } => {
-                    emit(Event::SpeechStart { at_ms: ms(at) });
-                    self.during_output = self.output();
-                    if self.during_output {
-                        emit(Event::BargeIn { at_ms: ms(at) });
-                    }
-                }
-                SegOut::Done { start, pcm, forced } => {
-                    emit(Event::Segment(self.segment(start, pcm, forced)));
-                    self.next_id += 1;
-                }
-                SegOut::Pause { start, pcm } => emit(Event::Pause(self.segment(start, pcm, false))),
-                SegOut::Resume => emit(Event::Resume),
+        // A finished turn at a pause adds a `Done` to `self.outs`, handled in the next round.
+        while !outs.is_empty() {
+            for out in outs.drain(..) {
+                self.handle(out, emit);
             }
+            std::mem::swap(&mut outs, &mut self.outs);
         }
         self.outs = outs;
+    }
+
+    fn handle(&mut self, out: SegOut, emit: &mut impl FnMut(Event)) {
+        match out {
+            SegOut::Start { at } => {
+                emit(Event::SpeechStart { at_ms: ms(at) });
+                self.during_output = self.output();
+                if self.during_output {
+                    emit(Event::BargeIn { at_ms: ms(at) });
+                }
+            }
+            SegOut::Done { start, pcm, forced } => {
+                let mut seg = self.segment(start, pcm, forced);
+                seg.turn_complete = std::mem::take(&mut self.turn_ended);
+                seg.silence_ms = ms(self.pos).saturating_sub(seg.end_ms);
+                emit(Event::Segment(seg));
+                self.next_id += 1;
+            }
+            SegOut::Pause { start, pcm } => {
+                let over = self.turn_over(&pcm);
+                emit(Event::Pause(self.segment(start, pcm, false)));
+                if over {
+                    self.turn_ended = true;
+                    self.segmenter.finish(&mut self.outs);
+                }
+            }
+            SegOut::Resume => emit(Event::Resume),
+        }
+    }
+
+    /// Smart Turn's verdict on the speech so far; false without the model and for likely echo of the output.
+    fn turn_over(&mut self, pcm: &[f32]) -> bool {
+        let Some(model) = &mut self.turn else { return false };
+        if self.drop_echo && self.during_output {
+            return false;
+        }
+        match model.complete(pcm) {
+            Ok(p) => p >= turn::COMPLETE,
+            Err(e) => {
+                eprintln!("llm_pal: {e}");
+                false
+            }
+        }
     }
 }
 
@@ -149,6 +203,8 @@ impl Core {
             end_ms: ms(start + pcm.len() as u64),
             forced_split,
             during_output: self.during_output,
+            turn_complete: false,
+            silence_ms: 0,
             features: prosody::analyze(&pcm),
             pcm,
         }
@@ -157,7 +213,7 @@ impl Core {
 
 /// Runs the whole chain over a recording. Deterministic; for tests and the `file` command.
 pub fn process_samples(cfg: &ProcessorConfig, samples: &[f32], rate: u32) -> Result<Vec<Event>, Error> {
-    let mut core = Core::new(cfg, rate, Arc::new(AtomicBool::new(false)), Arc::new(AtomicBool::new(false)))?;
+    let mut core = Core::new(cfg, rate, Arc::new(AtomicBool::new(false)), Arc::new(AtomicBool::new(false)), None)?;
     let mut events = Vec::new();
     let mut emit = |e| events.push(e);
     core.feed(samples, &mut emit)?;
@@ -176,11 +232,12 @@ pub struct Processor {
 }
 
 impl Processor {
-    pub fn start(cfg: &ProcessorConfig) -> Result<(Self, Receiver<Event>), Error> {
+    /// With `echo`, what the output plays is removed from the microphone signal.
+    pub fn start(cfg: &ProcessorConfig, echo: Option<EchoReference>) -> Result<(Self, Receiver<Event>), Error> {
         let (capture, ring) = capture::start(cfg.device.as_deref())?;
         let output_active = Arc::new(AtomicBool::new(false));
         let in_speech = Arc::new(AtomicBool::new(false));
-        let core = Core::new(cfg, capture.sample_rate, output_active.clone(), in_speech.clone())?;
+        let core = Core::new(cfg, capture.sample_rate, output_active.clone(), in_speech.clone(), echo)?;
         let stop = Arc::new(AtomicBool::new(false));
         let (tx, rx) = crossbeam_channel::unbounded();
         let live = Arc::new(AtomicBool::new(false));

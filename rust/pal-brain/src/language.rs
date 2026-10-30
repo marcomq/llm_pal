@@ -27,6 +27,8 @@ pub struct Profile {
     pub joke_intros: &'static [&'static str],
     /// Lowercase words that ask for a joke.
     pub joke_words: &'static [&'static str],
+    /// Fixed answers to common short lines, so they don't take room in the prompt.
+    pub quips: &'static [Quip],
     /// Lowercase words after which a sentence goes on.
     pub continues: &'static [&'static str],
     /// Prosody tag names, in the order of `prosody_tags::Tag`.
@@ -35,6 +37,13 @@ pub struct Profile {
     pub abbreviations: &'static [&'static str],
     /// Words the voice reads wrong, with a spelling it reads right.
     pub pronunciations: &'static [(&'static str, &'static str)],
+}
+
+/// A fixed answer to a common line. Each trigger is a set of lowercase words that must all occur; the answers take
+/// turns.
+pub struct Quip {
+    pub triggers: &'static [&'static str],
+    pub answers: &'static [&'static str],
 }
 
 impl Language {

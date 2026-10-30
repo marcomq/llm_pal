@@ -30,6 +30,10 @@ pub struct Segment {
     pub forced_split: bool,
     /// The app played audio (`Processor::output_active`) while this segment was open, so it may hold that audio.
     pub during_output: bool,
+    /// Ended at a pause because Smart Turn heard a finished turn, not after `end_silence_ms`.
+    pub turn_complete: bool,
+    /// Silence that followed `pcm` until the segment ended.
+    pub silence_ms: u64,
     pub features: Features,
     #[serde(skip)]
     pub pcm: Vec<f32>,

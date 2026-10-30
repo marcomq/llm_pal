@@ -3,14 +3,14 @@
 
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, OnceLock};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use pal_core::playback::PlaybackState;
-use pal_core::{Event, Processor, ProcessorConfig, SegmenterConfig};
+use pal_core::{Event, Processor, ProcessorConfig, Segment, SegmenterConfig};
 
 use crate::Result;
 use crate::language::Language;
@@ -19,18 +19,22 @@ use crate::persona::Persona;
 use crate::pocket_speaker::PocketSpeaker;
 use crate::prosody_tags::{self, ProsodyTags};
 use crate::sentences::Sentences;
-use crate::stt::Stt;
+use crate::stt::Recognizer;
 
 pub struct AgentConfig {
     pub vad_model: PathBuf,
+    /// Smart Turn model; without it a turn ends after a fixed silence.
+    pub turn_model: Option<PathBuf>,
     /// Part of the input device name.
     pub device: Option<String>,
     pub stt_library: PathBuf,
+    /// A Whisper `.bin` file (through `stt_library`) or a Parakeet TDT folder.
     pub stt_model: PathBuf,
     pub llm_model: PathBuf,
     /// Kyutai Pocket TTS catalog voice, such as "juergen".
     pub voice: String,
-    /// Speech during output stops it (needs headphones); otherwise such speech is ignored.
+    /// Speech during output stops it, with Pal's voice removed from the microphone; otherwise such speech is
+    /// ignored.
     pub barge_in: bool,
     pub language: Language,
 }
@@ -176,9 +180,14 @@ fn sounds_unfinished(text: &str, language: Language) -> bool {
     language.profile().continues.contains(&last.to_lowercase().as_str())
 }
 
+/// When the user stopped speaking, for a segment that arrived at `at`.
+fn speech_end(at: Instant, seg: &Segment) -> Instant {
+    at.checked_sub(Duration::from_millis(seg.silence_ms)).unwrap_or(at)
+}
+
 /// The first transcription and the first prompt are slow; this runs both before Pal listens and leaves the system
 /// prompt in the LLM's cache.
-fn warm_up(stt: &mut Stt, llm: &mut LlmSession, persona: &Persona) -> Result<()> {
+fn warm_up(stt: &mut Recognizer, llm: &mut LlmSession, persona: &Persona) -> Result<()> {
     stt.transcribe(&[0.0; 16_000])?;
     llm.prefill(&persona.context())
 }
@@ -195,10 +204,29 @@ fn barged_in(mut waiting: impl FnMut() -> Option<Event>, backlog: &mut VecDeque<
     barged
 }
 
+/// `PAL_RECORD_DIR`: each segment as 16 kHz WAV plus the recognised text, test data for tests/stt_compare.rs.
+fn record(dir: &Path, pcm: &[f32], text: &str) -> std::result::Result<(), Box<dyn std::error::Error>> {
+    std::fs::create_dir_all(dir)?;
+    let name = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis().to_string();
+    let spec = hound::WavSpec {
+        channels: 1,
+        sample_rate: 16_000,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
+    let mut wav = hound::WavWriter::create(dir.join(format!("{name}.wav")), spec)?;
+    for s in pcm {
+        wav.write_sample((s.clamp(-1.0, 1.0) * 32767.0) as i16)?;
+    }
+    wav.finalize()?;
+    std::fs::write(dir.join(format!("{name}.stt.txt")), text)?;
+    Ok(())
+}
+
 fn converse(cfg: &AgentConfig, shared: &Shared, tx: &Sender<AgentEvent>) -> Result<()> {
     let send = |e| drop(tx.send(e));
-    let mut stt = Stt::new(&cfg.stt_library, &cfg.stt_model)?;
-    stt.set_language(cfg.language.code())?;
+    let record_dir = std::env::var_os("PAL_RECORD_DIR").map(PathBuf::from);
+    let mut stt = Recognizer::new(&cfg.stt_library, &cfg.stt_model, cfg.language.code())?;
     let model = LocalLlm::new(&cfg.llm_model, LlmConfig::default())?;
     let mut llm = model.session()?;
     let mut speaker = PocketSpeaker::new(&cfg.voice, cfg.language)?;
@@ -208,11 +236,13 @@ fn converse(cfg: &AgentConfig, shared: &Shared, tx: &Sender<AgentEvent>) -> Resu
         segmenter: SegmenterConfig::default(),
         device: cfg.device.clone(),
         drop_echo: !cfg.barge_in,
+        turn_model: cfg.turn_model.clone(),
     };
     let mut persona = Persona::kitt(cfg.language);
     llm.set_fixed_messages(persona.fixed_messages());
     warm_up(&mut stt, &mut llm, &persona)?;
-    let (processor, events) = Processor::start(&pcfg)?;
+    let echo = cfg.barge_in.then(|| speaker.output().take_echo_reference()).flatten();
+    let (processor, events) = Processor::start(&pcfg, echo)?;
     let active = processor.output_active();
     let _ = shared.hearing.set(processor.in_speech());
     if !processor.wait_live(LIVE_TIMEOUT) {
@@ -282,11 +312,16 @@ fn converse(cfg: &AgentConfig, shared: &Shared, tx: &Sender<AgentEvent>) -> Resu
             }
         };
         let stt_ms = t0.elapsed().as_millis();
+        if let Some(dir) = &record_dir
+            && let Err(e) = record(dir, &seg.pcm, &text)
+        {
+            eprintln!("llm_pal: recording to {}: {e}", dir.display());
+        }
         if text.is_empty() {
             continue;
         }
         if !early {
-            if sounds_unfinished(&text, cfg.language) && goes_on() {
+            if !seg.turn_complete && sounds_unfinished(&text, cfg.language) && goes_on() {
                 *carry.borrow_mut() = Some(seg.pcm);
                 continue;
             }
@@ -294,7 +329,7 @@ fn converse(cfg: &AgentConfig, shared: &Shared, tx: &Sender<AgentEvent>) -> Resu
         }
         let line = Persona::user_line(&text, &prosody_tags::format(&tags.tag(&seg.features), cfg.language));
 
-        let ended = Cell::new(if early { None } else { Some(t0) });
+        let ended = Cell::new(if early { None } else { Some(speech_end(t0, &seg)) });
         let mut held = early.then(Vec::new);
         let mut discarded = false;
         let stop = AtomicBool::new(false);
@@ -324,7 +359,7 @@ fn converse(cfg: &AgentConfig, shared: &Shared, tx: &Sender<AgentEvent>) -> Resu
                     match event {
                         Event::Resume => *discarded = true,
                         Event::Segment(end) => {
-                            if sounds_unfinished(&text, cfg.language) && goes_on() {
+                            if !end.turn_complete && sounds_unfinished(&text, cfg.language) && goes_on() {
                                 let before = carry.take().unwrap_or_default();
                                 *carry.borrow_mut() = Some([before, end.pcm].concat());
                                 *discarded = true;
@@ -332,7 +367,7 @@ fn converse(cfg: &AgentConfig, shared: &Shared, tx: &Sender<AgentEvent>) -> Resu
                             }
                             carry.take();
                             send(AgentEvent::Heard(line.clone()));
-                            ended.set(Some(Instant::now()));
+                            ended.set(Some(speech_end(Instant::now(), &end)));
                             held.take().into_iter().flatten().for_each(&mut *speak);
                         }
                         _ => {}
@@ -342,8 +377,8 @@ fn converse(cfg: &AgentConfig, shared: &Shared, tx: &Sender<AgentEvent>) -> Resu
         if !early {
             send(AgentEvent::Heard(line.clone()));
         }
-        if let Some(joke) = persona.joke(&text) {
-            sentences.push(&joke).into_iter().for_each(|s| route(s, &mut held, &mut speak));
+        if let Some(canned) = persona.joke(&text).or_else(|| persona.quip(&text)) {
+            sentences.push(&canned).into_iter().for_each(|s| route(s, &mut held, &mut speak));
         } else {
             let replied = llm.reply(&persona.messages(&line), &stop, &mut |piece| {
                 interrupted |=

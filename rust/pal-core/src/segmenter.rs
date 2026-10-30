@@ -141,7 +141,7 @@ impl Segmenter {
         self.pre.clear();
     }
 
-    /// Closes an open segment at the end of the stream.
+    /// Closes an open segment now: at the end of the stream, or when the turn is over.
     pub fn finish(&mut self, out: &mut Vec<SegOut>) {
         if self.speech.is_some() {
             self.end(out);

@@ -18,7 +18,8 @@ const STATE_LEN: usize = 2 * 128;
 
 static ENVIRONMENT: OnceLock<Result<Environment, String>> = OnceLock::new();
 
-fn environment() -> Result<&'static Environment, Error> {
+/// The process-wide ONNX Runtime, shared by every model.
+pub fn environment() -> Result<&'static Environment, Error> {
     ENVIRONMENT
         .get_or_init(|| ort::init().with_name("llm_pal").build().map_err(|e| e.to_string()))
         .as_ref()

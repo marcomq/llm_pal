@@ -3,11 +3,14 @@
 use std::collections::VecDeque;
 use std::hash::{BuildHasher, RandomState};
 
-use crate::language::Language;
+use crate::language::{Language, Quip};
 use crate::llm::{Message, Role};
 
 /// Jokes per start: enough variety, few enough that a small model still follows the prompt.
 const JOKES_PER_START: usize = 10;
+
+/// Longer lines are about more than a quip's trigger and go to the model.
+const QUIP_MAX_WORDS: usize = 10;
 
 pub struct Persona {
     system: String,
@@ -18,6 +21,9 @@ pub struct Persona {
     next_joke: usize,
     joke_intros: &'static [&'static str],
     joke_words: &'static [&'static str],
+    quips: &'static [Quip],
+    /// Per quip, how many of its answers were given, starting at a random count.
+    quips_given: Vec<usize>,
     history: VecDeque<(String, String)>,
     max_turns: usize,
 }
@@ -32,6 +38,8 @@ impl Persona {
             jokes,
             joke_intros: p.joke_intros,
             joke_words: p.joke_words,
+            quips: p.quips,
+            quips_given: (0..p.quips.len()).map(|i| RandomState::new().hash_one(i) as usize).collect(),
             ..Self::new(format!("{}\n{}{list}", p.system_prompt, p.joke_offer))
         }
     }
@@ -49,6 +57,20 @@ impl Persona {
         Some(format!("{intro} {}", self.jokes[i % self.jokes.len()]))
     }
 
+    /// A fixed answer if `transcript` is a short line a quip knows; each time the next of its answers.
+    pub fn quip(&mut self, transcript: &str) -> Option<String> {
+        let line = transcript.to_lowercase();
+        let words: Vec<&str> = line.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).collect();
+        if words.len() > QUIP_MAX_WORDS {
+            return None;
+        }
+        let said = |trigger: &&str| trigger.split(' ').all(|w| words.contains(&w));
+        let i = self.quips.iter().position(|q| q.triggers.iter().any(said))?;
+        let answers = self.quips[i].answers;
+        self.quips_given[i] += 1;
+        Some(answers[self.quips_given[i] % answers.len()].to_string())
+    }
+
     pub fn new(system: impl Into<String>) -> Self {
         Self {
             system: system.into(),
@@ -57,6 +79,8 @@ impl Persona {
             next_joke: 0,
             joke_intros: &[],
             joke_words: &[],
+            quips: &[],
+            quips_given: Vec::new(),
             history: VecDeque::new(),
             max_turns: 3,
         }
@@ -159,6 +183,27 @@ mod tests {
     fn words_that_only_contain_joke_ask_for_none() {
         assert_eq!(Persona::kitt(Language::German).joke("Das ist witzig"), None);
         assert_eq!(Persona::kitt(Language::English).joke("I'm not joking"), None);
+    }
+
+    #[test]
+    fn short_lines_get_the_quips_answers_in_turn() {
+        let mut p = Persona::kitt(Language::German);
+        let (a, b) = (p.quip("Wie ist das Wetter?").unwrap(), p.quip("Und wie wird das Wetter morgen?").unwrap());
+        assert_ne!(a, b);
+        assert!(p.quip("Wie geht's dir, Pal?").is_some());
+        assert_eq!(p.quip("Wie geht das?"), None, "every word of a trigger must occur");
+        assert_eq!(p.quip("Bei dem Wetter habe ich heute wirklich überhaupt keine Lust, noch rauszugehen"), None);
+        assert!(Persona::kitt(Language::English).quip("How are you today?").is_some());
+    }
+
+    #[test]
+    fn every_quip_has_answers_and_lowercase_triggers() {
+        for language in Language::ALL {
+            for q in language.profile().quips {
+                assert!(!q.answers.is_empty() && !q.triggers.is_empty(), "{language:?}");
+                assert!(q.triggers.iter().all(|t| *t == t.to_lowercase()), "{:?}", q.triggers);
+            }
+        }
     }
 
     #[test]

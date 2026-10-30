@@ -18,6 +18,8 @@ pub struct PalStt {
     state: WhisperState,
     threads: i32,
     language: String,
+    /// `PAL_STT_FULL_WINDOW=1`: always the 30 s window, to compare accuracy against the shortened one.
+    full_window: bool,
 }
 
 /// The encoder normally works on a 30 s window (1500 frames of 20 ms). Short clips only need their own length plus
@@ -39,7 +41,12 @@ impl PalStt {
         let ctx =
             WhisperContext::new_with_params(model, WhisperContextParameters::default()).map_err(|e| e.to_string())?;
         let threads = std::thread::available_parallelism().map_or(4, |n| n.get().min(4)) as i32;
-        Ok(Self { state: ctx.create_state().map_err(|e| e.to_string())?, threads, language: "auto".into() })
+        Ok(Self {
+            state: ctx.create_state().map_err(|e| e.to_string())?,
+            threads,
+            language: "auto".into(),
+            full_window: std::env::var_os("PAL_STT_FULL_WINDOW").is_some_and(|v| v == "1"),
+        })
     }
 
     fn transcribe(&mut self, pcm: &[f32]) -> Result<String, String> {
@@ -69,7 +76,9 @@ impl PalStt {
         } else {
             pcm
         };
-        params.set_audio_ctx(audio_ctx(audio.len()));
+        if !self.full_window {
+            params.set_audio_ctx(audio_ctx(audio.len()));
+        }
         params.set_max_tokens(max_tokens(pcm.len()));
         self.state.full(params, audio).map_err(|e| e.to_string())?;
 

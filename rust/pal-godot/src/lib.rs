@@ -24,12 +24,18 @@ pub struct PalNode {
     /// "de" or "en": what Pal listens for and speaks; takes effect on `start`.
     #[export]
     language: GString,
-    /// Speech during output stops it (needs headphones).
+    /// Speech during output stops it; echo cancellation keeps Pal from hearing himself.
     #[export]
     barge_in: bool,
+    /// Smart Turn ends a turn at a pause when the speech sounds finished; takes effect on `start`.
+    #[export]
+    smart_turn: bool,
     /// GGUF file name in the model dir; takes effect on `start`.
     #[export]
     llm_model: GString,
+    /// Whisper `.bin` file or Parakeet folder in the model dir; takes effect on `start`.
+    #[export]
+    stt_model: GString,
     base: Base<Node>,
 }
 
@@ -42,8 +48,10 @@ impl INode for PalNode {
             pending_start: None,
             pocket_voice: "juergen".into(),
             language: "de".into(),
-            barge_in: false,
-            llm_model: "Qwen3.5-0.8B-Q4_K_M.gguf".into(),
+            barge_in: true,
+            smart_turn: true,
+            llm_model: "Qwen3.5-2B-Q4_K_M.gguf".into(),
+            stt_model: "ggml-small-q5_1.bin".into(),
             base,
         }
     }
@@ -103,7 +111,7 @@ impl PalNode {
     #[constant]
     const STOPPED: i32 = State::Stopped as i32;
 
-    /// Absolute paths: `model_dir` holds silero_vad.onnx, the Whisper and the Qwen model; `stt_library` is libpal_stt.
+    /// Absolute paths: `model_dir` holds silero_vad.onnx, the STT and the Qwen model; `stt_library` is libpal_stt.
     /// After `stop`, the new agent starts once the old one has finished.
     #[func]
     fn start(&mut self, model_dir: GString, stt_library: GString) {
@@ -126,9 +134,10 @@ impl PalNode {
         }
         self.agent = Some(Agent::start(AgentConfig {
             vad_model: dir.join("silero_vad.onnx"),
+            turn_model: Some(dir.join("smart-turn-v3.2-cpu.onnx")).filter(|p| self.smart_turn && p.exists()),
             device: None,
             stt_library: stt_library.to_string().into(),
-            stt_model: dir.join("ggml-small-q5_1.bin"),
+            stt_model: dir.join(self.stt_model.to_string()),
             llm_model: dir.join(self.llm_model.to_string()),
             voice: self.pocket_voice.to_string(),
             barge_in: self.barge_in,

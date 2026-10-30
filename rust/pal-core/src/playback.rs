@@ -1,13 +1,14 @@
 //! Speech output through cpal: a lock-free ring feeds the callback, which also measures the output level.
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{BufferSize, Stream, StreamConfig};
 
 use crate::Error;
+use crate::echo::EchoReference;
 
 const RING_SECONDS: u32 = 30;
 /// Audio queued before output (re)starts, so a TTS barely faster than real time doesn't run dry and click.
@@ -24,6 +25,7 @@ pub struct PlaybackState {
     generation: AtomicU64,
     /// Nothing more follows for now: play what is queued even if it is shorter than the pre-roll.
     draining: AtomicBool,
+    echo_reference: Mutex<Option<EchoReference>>,
 }
 
 impl PlaybackState {
@@ -34,6 +36,11 @@ impl PlaybackState {
 
     pub fn busy(&self) -> bool {
         self.queued.load(Ordering::Relaxed) > 0
+    }
+
+    /// What the device plays, for the echo canceller; there is one, so only the first call gets it.
+    pub fn take_echo_reference(&self) -> Option<EchoReference> {
+        self.echo_reference.lock().ok()?.take()
     }
 
     /// Drops everything queued; a running `play` returns early.
@@ -63,7 +70,11 @@ impl Playback {
         let config = StreamConfig { channels: channels as u16, sample_rate, buffer_size: BufferSize::Default };
 
         let (tx, mut rx) = rtrb::RingBuffer::<f32>::new((sample_rate * RING_SECONDS) as usize);
-        let state = Arc::new(PlaybackState::default());
+        let (mut played, reference) = rtrb::RingBuffer::<f32>::new(sample_rate as usize);
+        let state = Arc::new(PlaybackState {
+            echo_reference: Mutex::new(Some(EchoReference { played: reference, sample_rate })),
+            ..Default::default()
+        });
         let st = state.clone();
         let preroll = (sample_rate * PREROLL_MS / 1000) as usize;
         let mut primed = false;
@@ -94,6 +105,8 @@ impl Playback {
                         }
                         sum += s * s;
                         frame.fill(s);
+                        // Full while no echo canceller reads it; it drops its stale start.
+                        let _ = played.push(s);
                     }
                     let rms = (sum / (out.len() / channels).max(1) as f32).sqrt();
                     st.level.store(rms.to_bits(), Ordering::Relaxed);
