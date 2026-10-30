@@ -1,0 +1,21 @@
+[package]
+name = "pal-brain"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+pal-core.workspace = true
+libloading = "0.9"
+llama-cpp-2 = "0.1.160"
+thiserror = "2"
+pal-tts = { path = "../pal-tts" }
+
+[dev-dependencies]
+hound = "3.5.1"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+block2 = "0.6.2"
+objc2 = "0.6.5"
+objc2-foundation = { version = "0.3.2", features = ["NSString", "NSArray", "NSRunLoop", "NSDate"] }
+objc2-avf-audio = { version = "0.3.2", features = ["AVSpeechSynthesis", "AVAudioBuffer", "AVAudioFormat", "block2"] }

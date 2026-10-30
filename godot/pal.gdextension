@@ -1,0 +1,12 @@
+[configuration]
+entry_symbol = "gdext_rust_init"
+compatibility_minimum = 4.7
+reloadable = false
+
+[libraries]
+macos = "res://bin/macos/libpal_godot.dylib"
+android.arm64 = "res://bin/android/libpal_godot.so"
+
+[dependencies]
+macos = { "res://bin/macos/libpal_stt.dylib" : "" }
+android.arm64 = { "res://bin/android/libpal_stt.so" : "" }

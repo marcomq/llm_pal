@@ -1,0 +1,29 @@
+//! llm_pal audio processor: microphone → 16 kHz mono → Silero VAD → segments with prosody features.
+//!
+//! Audio-thread rule: the cpal callback only downmixes into a lock-free ring; resampling, inference and
+//! analysis run on the worker thread (`pipeline`).
+
+#[cfg(target_os = "android")]
+mod android;
+pub mod capture;
+pub mod event;
+pub mod pipeline;
+pub mod playback;
+pub mod prosody;
+pub mod resample;
+pub mod segmenter;
+pub mod vad;
+
+pub use event::{Event, Features, Segment};
+pub use pipeline::{Processor, ProcessorConfig, process_samples};
+pub use segmenter::SegmenterConfig;
+
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error("resampler: {0}")]
+    Resample(String),
+    #[error("VAD: {0}")]
+    Vad(String),
+    #[error("audio: {0}")]
+    Audio(String),
+}

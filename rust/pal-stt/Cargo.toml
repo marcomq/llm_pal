@@ -1,0 +1,13 @@
+[package]
+name = "pal-stt"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# A shared library on purpose: whisper.cpp and llama.cpp each bundle a different ggml version, which cannot be
+# linked into one binary. Inside this library whisper's ggml stays private; pal-brain loads it at runtime.
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+whisper-rs = "0.16"
