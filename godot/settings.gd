@@ -80,7 +80,11 @@ func _init(cfg: ConfigFile, path: String, lang: String) -> void:
 	_name.placeholder_text = DEFAULT_NAME
 	for i in PROVIDERS.size():
 		_provider.add_item(PROVIDER_NAMES[i], i)
-	_provider.item_selected.connect(func(_i: int) -> void: _show_provider())
+	_provider.item_selected.connect(func(_i: int) -> void:
+		_url.text = ""
+		_model.text = ""
+		_key.text = ""
+		_show_provider())
 	_field(form, "llm", _provider)
 	_remote.append(_field(form, "url", _url))
 	_remote.append(_field(form, "model", _model))
