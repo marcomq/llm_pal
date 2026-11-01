@@ -3,7 +3,7 @@
 use std::collections::VecDeque;
 use std::hash::{BuildHasher, RandomState};
 
-use crate::language::{Language, Quip};
+use crate::language::Language;
 use crate::llm::{Message, Role};
 
 /// Jokes per start: enough variety, few enough that a small model still follows the prompt.
@@ -33,7 +33,7 @@ pub struct Persona {
     next_joke: usize,
     joke_intros: &'static [&'static str],
     joke_words: &'static [&'static str],
-    quips: &'static [Quip],
+    quips: Vec<Quip>,
     /// Per quip, how many of its answers were given, starting at a random count.
     quips_given: Vec<usize>,
     /// Fixed turns: a line saying every content word of one gets its reply word for word.
@@ -48,14 +48,15 @@ impl Persona {
         let p = language.profile();
         let jokes = pick(p.jokes.lines(), JOKES_PER_START);
         let list: String = jokes.iter().map(|j| format!("\n{j}")).collect();
+        let (quips, pool) = parse_pool(p.pool);
         Self {
             examples: p.examples,
             jokes,
             joke_intros: p.joke_intros,
             joke_words: p.joke_words,
-            quips: p.quips,
-            quips_given: (0..p.quips.len()).map(|i| RandomState::new().hash_one(i) as usize).collect(),
-            pool: p.pool.lines().filter_map(|l| l.split_once('|')).map(|(u, a)| (u.trim(), a.trim())).collect(),
+            quips_given: (0..quips.len()).map(|i| RandomState::new().hash_one(i) as usize).collect(),
+            quips,
+            pool,
             filler: p.filler,
             name: name.to_string(),
             ..Self::new(format!("{}\n{}{list}", p.system_prompt, p.joke_offer).replace(DEFAULT_NAME, name))
@@ -84,8 +85,8 @@ impl Persona {
         }
         let said = |trigger: &&str| trigger.split(' ').all(|w| words.contains(&w));
         let i = self.quips.iter().position(|q| q.triggers.iter().any(said))?;
-        let answers = self.quips[i].answers;
         self.quips_given[i] += 1;
+        let answers = &self.quips[i].answers;
         Some(self.named(answers[self.quips_given[i] % answers.len()]))
     }
 
@@ -98,7 +99,7 @@ impl Persona {
             next_joke: 0,
             joke_intros: &[],
             joke_words: &[],
-            quips: &[],
+            quips: Vec::new(),
             quips_given: Vec::new(),
             pool: Vec::new(),
             filler: &[],
@@ -186,6 +187,28 @@ impl Persona {
     }
 }
 
+/// A fixed answer to a common line. Each trigger is a set of lowercase words that must all occur; the answers take
+/// turns.
+struct Quip {
+    triggers: Vec<&'static str>,
+    answers: Vec<&'static str>,
+}
+
+/// Splits a pool file into its quips (`= trigger; trigger | reply | reply`) and sample turns (`line | reply`).
+fn parse_pool(text: &'static str) -> (Vec<Quip>, Vec<(&'static str, &'static str)>) {
+    let (mut quips, mut turns) = (Vec::new(), Vec::new());
+    for line in text.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')) {
+        if let Some(quip) = line.strip_prefix('=') {
+            let mut parts = quip.split('|').map(str::trim);
+            let triggers = parts.next().unwrap_or_default().split(';').map(str::trim).collect();
+            quips.push(Quip { triggers, answers: parts.collect() });
+        } else if let Some((u, a)) = line.split_once('|') {
+            turns.push((u.trim(), a.trim()));
+        }
+    }
+    (quips, turns)
+}
+
 fn negated(text: &str) -> bool {
     let lower = text.to_lowercase().replace('’', "'");
     lower.contains("n't") || lower.split(|c: char| !c.is_alphanumeric()).any(|w| NEGATIONS.contains(&w))
@@ -268,9 +291,9 @@ mod tests {
     #[test]
     fn every_quip_has_answers_and_lowercase_triggers() {
         for language in Language::ALL {
-            for q in language.profile().quips {
-                assert!(!q.answers.is_empty() && !q.triggers.is_empty(), "{language:?}");
-                assert!(q.triggers.iter().all(|t| *t == t.to_lowercase()), "{:?}", q.triggers);
+            for q in Persona::kitt(language, DEFAULT_NAME).quips {
+                assert!(q.answers.iter().all(|a| !a.is_empty()) && !q.answers.is_empty(), "{:?}", q.triggers);
+                assert!(q.triggers.iter().all(|t| !t.is_empty() && *t == t.to_lowercase()), "{:?}", q.triggers);
             }
         }
     }
@@ -298,7 +321,8 @@ mod tests {
     fn every_pool_line_has_a_turn() {
         for language in Language::ALL {
             let p = Persona::kitt(language, DEFAULT_NAME);
-            assert_eq!(p.pool.len(), language.profile().pool.lines().count(), "{language:?}");
+            let lines = language.profile().pool.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#'));
+            assert_eq!(p.pool.len() + p.quips.len(), lines.count(), "{language:?}");
             assert!(p.pool.iter().all(|(u, a)| !u.is_empty() && !a.is_empty()), "{language:?}");
         }
     }
