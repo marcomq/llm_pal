@@ -17,6 +17,10 @@ const POOL_MAX_WORDS: usize = 20;
 
 /// The name the texts call the user; `Persona::kitt` puts the configured one in its place.
 pub const DEFAULT_NAME: &str = "Michael";
+/// A pool line fits only if it is negated like the transcript; "I'm not drinking beer" isn't "I'm drinking beer".
+const NEGATIONS: &[&str] = &[
+    "not", "no", "never", "nothing", "nicht", "kein", "keine", "keinen", "keinem", "keiner", "nie", "niemals", "nichts",
+];
 
 pub struct Persona {
     system: String,
@@ -113,6 +117,7 @@ impl Persona {
         let (_, reply) = self
             .pool
             .iter()
+            .filter(|(u, _)| negated(u) == negated(transcript))
             .filter(|(_, a)| self.history.iter().all(|(_, r)| *r != self.named(a)))
             .map(|&(u, a)| (self.content_words(u), a))
             .filter(|(words, _)| !words.is_empty() && words.iter().all(|w| said.iter().any(|s| alike(s, w))))
@@ -179,6 +184,11 @@ impl Persona {
             self.history.pop_front();
         }
     }
+}
+
+fn negated(text: &str) -> bool {
+    let lower = text.to_lowercase().replace('’', "'");
+    lower.contains("n't") || lower.split(|c: char| !c.is_alphanumeric()).any(|w| NEGATIONS.contains(&w))
 }
 
 /// The same word, or one sharing its first five letters ("arbeit", "arbeiten").
@@ -277,7 +287,11 @@ mod tests {
         assert_eq!(p.pooled(long), None, "a long line goes to the model");
         p.remember("Es regnet".into(), p.pooled("Es regnet").unwrap());
         assert_eq!(p.pooled("Es regnet"), None, "a reply in the history is not given again");
-        assert!(Persona::kitt(Language::English, DEFAULT_NAME).pooled("I'm stuck in traffic again.").is_some());
+        let en = Persona::kitt(Language::English, DEFAULT_NAME);
+        assert!(en.pooled("I'm stuck in traffic again.").is_some());
+        let beer = en.pooled("I'm drinking beer today.");
+        assert!(beer.as_ref().is_none_or(|r| !r.contains("without beer")), "negation must match: {beer:?}");
+        assert!(en.pooled("I'm not drinking beer today.").unwrap().contains("without beer"));
     }
 
     #[test]

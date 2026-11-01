@@ -3,6 +3,7 @@
 
 use std::io::{BufRead, BufReader, Read};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{RecvTimeoutError, channel};
 use std::time::Duration;
 
 use serde_json::{Value, json};
@@ -14,6 +15,8 @@ const ANTHROPIC_VERSION: &str = "2026-10-21";
 /// Anthropic requires a limit; it also covers the model's thinking, so it is far above a spoken reply.
 const ANTHROPIC_MAX_TOKENS: u32 = 1024;
 const ERROR_BODY_CHARS: usize = 300;
+/// How often a waiting reply checks for cancellation.
+const CANCEL_POLL: Duration = Duration::from_millis(50);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Provider {
@@ -52,6 +55,7 @@ pub struct RemoteConfig {
     pub api_key: String,
 }
 
+#[derive(Clone)]
 pub struct RemoteLlm {
     cfg: RemoteConfig,
     agent: ureq::Agent,
@@ -61,7 +65,9 @@ impl RemoteLlm {
     pub fn new(cfg: RemoteConfig) -> Self {
         let agent = ureq::Agent::config_builder()
             .timeout_connect(Some(Duration::from_secs(5)))
-            .timeout_global(Some(Duration::from_secs(60)))
+            // Ollama may load the model first. After that, a reply may take long, as long as data keeps coming.
+            .timeout_recv_response(Some(Duration::from_secs(30)))
+            .timeout_per_read(Some(Duration::from_secs(15)))
             .http_status_as_error(false)
             .build()
             .new_agent();
@@ -101,10 +107,43 @@ impl RemoteLlm {
     }
 }
 
+enum Chunk {
+    Text(String),
+    Done,
+    Failed(Error),
+}
+
 impl Llm for RemoteLlm {
+    /// The request runs on its own thread, so a cancel returns at once even while the server is silent; the
+    /// thread then ends with its next piece or a timeout.
     fn reply(&mut self, messages: &[Message], cancel: &AtomicBool, on_text: &mut dyn FnMut(&str)) -> Result<String> {
-        let body = self.send(messages)?;
-        read_stream(self.cfg.provider, body.into_reader(), cancel, on_text)
+        let (tx, rx) = channel();
+        let (llm, messages) = (self.clone(), messages.to_vec());
+        std::thread::spawn(move || {
+            let stop = AtomicBool::new(false);
+            let streamed = llm.send(&messages).and_then(|body| {
+                read_stream(llm.cfg.provider, body.into_reader(), &stop, &mut |text| {
+                    if tx.send(Chunk::Text(text.to_string())).is_err() {
+                        stop.store(true, Ordering::Relaxed);
+                    }
+                })
+            });
+            let _ = tx.send(streamed.map_or_else(Chunk::Failed, |_| Chunk::Done));
+        });
+        let mut reply = String::new();
+        while !cancel.load(Ordering::Relaxed) {
+            match rx.recv_timeout(CANCEL_POLL) {
+                Ok(Chunk::Text(text)) => {
+                    on_text(&text);
+                    reply.push_str(&text);
+                }
+                Ok(Chunk::Done) => break,
+                Ok(Chunk::Failed(e)) => return Err(e),
+                Err(RecvTimeoutError::Timeout) => {}
+                Err(RecvTimeoutError::Disconnected) => return Err(Error::Llm("request thread died".into())),
+            }
+        }
+        Ok(reply)
     }
 }
 
@@ -278,6 +317,24 @@ mod tests {
         let request = server.join().unwrap();
         assert!(request.starts_with("POST /v1/chat/completions"), "{request}");
         assert!(request.contains("authorization: Bearer secret"), "{request}");
+    }
+
+    #[test]
+    fn cancel_returns_while_the_server_is_silent() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/v1", listener.local_addr().unwrap());
+        let cancel = std::sync::Arc::new(AtomicBool::new(false));
+        let c = cancel.clone();
+        std::thread::spawn(move || {
+            let _held = listener.accept();
+            std::thread::sleep(Duration::from_millis(200));
+            c.store(true, Ordering::Relaxed);
+            std::thread::sleep(Duration::from_secs(5));
+        });
+        let started = std::time::Instant::now();
+        let reply = remote(Provider::OpenAi, url).reply(&[], &cancel, &mut |_| {}).unwrap();
+        assert!(reply.is_empty());
+        assert!(started.elapsed() < Duration::from_secs(1), "{:?}", started.elapsed());
     }
 
     #[test]

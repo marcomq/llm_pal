@@ -49,6 +49,6 @@ impl Recognizer {
         msg.set_metadata("audio_sample_rate", "16000");
         let answer = self.runtime.block_on(self.publisher.request(msg)).map_err(|e| err(format!("{e:#}")))?;
         let heard: Heard = serde_json::from_slice(&answer.payload).map_err(err)?;
-        Ok(heard.text)
+        Ok(heard.text.trim().to_string())
     }
 }
