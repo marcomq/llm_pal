@@ -6,7 +6,7 @@
 use std::cell::RefCell;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{Receiver, Sender, channel};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, channel};
 use std::time::{Duration, Instant};
 
 use mq_bridge::blocking_handler::{BlockingHandler, CancelHandle, HandlerContext, ThreadedHandler};
@@ -31,6 +31,8 @@ const PIECES: &str = "pal.pieces";
 const SPEECH: &str = "pal.speech";
 const ROUTES: [&str; 3] = ["pal_llm", "pal_split", "pal_speak"];
 const CLOSE_TIMEOUT: Duration = Duration::from_secs(10);
+/// How often a running reply checks whether its turn was cancelled.
+const CANCEL_POLL: Duration = Duration::from_millis(50);
 
 /// What the routes report back to the conversation loop.
 #[derive(Debug)]
@@ -132,13 +134,27 @@ fn stream(
 ) -> std::result::Result<(Result<String>, bool), HandlerError> {
     let stop = AtomicBool::new(false);
     let (mut sent, mut any) = (Ok(()), false);
-    let replied = llm.reply(&chat.messages, &stop, &mut |piece| {
-        if ctx.is_cancelled() || sent.is_err() {
-            stop.store(true, Ordering::Relaxed);
-        } else {
-            any = true;
-            sent = ctx.emit(turn_message("piece", turn, piece));
-        }
+    let replied = std::thread::scope(|s| {
+        // Sets `stop` on a route cancel even while the model sends nothing; ends as soon as the reply returns.
+        let (done, finished) = channel::<()>();
+        s.spawn(|| {
+            while finished.recv_timeout(CANCEL_POLL).is_err_and(|e| e == RecvTimeoutError::Timeout) {
+                if ctx.is_cancelled() {
+                    stop.store(true, Ordering::Relaxed);
+                    break;
+                }
+            }
+        });
+        let replied = llm.reply(&chat.messages, &stop, &mut |piece| {
+            if ctx.is_cancelled() || sent.is_err() {
+                stop.store(true, Ordering::Relaxed);
+            } else {
+                any = true;
+                sent = ctx.emit(turn_message("piece", turn, piece));
+            }
+        });
+        drop(done);
+        replied
     });
     sent?;
     Ok((replied, any))

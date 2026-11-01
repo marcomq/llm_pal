@@ -78,7 +78,8 @@ Voice: `juergen`.
   `ready_to_listen`, `heard`, `said`, `turn_done`, `interrupted`, `ignored`, `failed`, `reply_failed`.
 - `main.gd`: `_start()` copies settings onto `PalNode`. The "…" label or key S opens the settings form.
 - `settings.gd` (`Settings`): saves to `user://settings.cfg` (sections `user`, `llm`); saving restarts Pal. An empty
-  URL or model means the provider default (defaults exist both in `settings.gd` and `remote.rs`).
+  URL means the provider default (in `settings.gd` and `remote.rs`). An empty model is replaced by the provider's
+  model default from `settings.gd` only; `remote.rs` has no model default and sends the model as given.
 - Environment: `PAL_MODELS` (models folder), `PAL_LLM` (GGUF file), `PAL_SMART_TURN=0`, `PAL_BARGE_IN=0`,
   `PAL_RECORD_DIR` (saves each segment as WAV + transcript, for STT test data).
 
