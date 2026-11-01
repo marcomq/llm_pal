@@ -99,6 +99,7 @@ func _start() -> void:
 	pal.smart_turn = OS.get_environment("PAL_SMART_TURN") != "0"
 	pal.barge_in = OS.get_environment("PAL_BARGE_IN") != "0"
 	pal.user_name = Settings.user_name(_cfg)
+	pal.pocket_voice = Settings.voice(_cfg, _lang)
 	pal.llm_provider = Settings.provider(_cfg)
 	pal.llm_url = Settings.url(_cfg)
 	pal.llm_remote_model = Settings.model(_cfg)

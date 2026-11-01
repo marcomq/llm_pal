@@ -69,7 +69,7 @@ Everything runs in `converse` in `pal-brain/src/agent.rs`, a loop on the agent's
 
 `pal-brain/src/tts.rs` (`PocketSpeaker`): Pocket TTS in-process, one thread generates, one owns the playback.
 `numbers.rs` writes digits as words, `leveler.rs` evens out loudness, `voice_filter.rs` adds KITT's speaker sound.
-Voice: `juergen`.
+Voice per language from the settings (`Settings.VOICES`, default `juergen`); `push-models` copies the same list.
 
 ## Godot
 
@@ -77,7 +77,7 @@ Voice: `juergen`.
   `llm_url`, `llm_remote_model`, `llm_api_key`, `llm_fallback`, `smart_turn`, `barge_in`. Signals:
   `ready_to_listen`, `heard`, `said`, `turn_done`, `interrupted`, `ignored`, `failed`, `reply_failed`.
 - `main.gd`: `_start()` copies settings onto `PalNode`. The "…" label or key S opens the settings form.
-- `settings.gd` (`Settings`): saves to `user://settings.cfg` (sections `user`, `llm`); saving restarts Pal. An empty
+- `settings.gd` (`Settings`): saves to `user://settings.cfg` (sections `user`, `voice`, `llm`); saving restarts Pal. An empty
   URL means the provider default (in `settings.gd` and `remote.rs`). An empty model is replaced by the provider's
   model default from `settings.gd` only; `remote.rs` has no model default and sends the model as given.
 - Environment: `PAL_MODELS` (models folder), `PAL_LLM` (GGUF file), `PAL_SMART_TURN=0`, `PAL_BARGE_IN=0`,

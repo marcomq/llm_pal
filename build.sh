@@ -51,7 +51,7 @@ push_models() {
 push_pocket() {
     repo=kyutai/pocket-tts-without-voice-cloning
     snap="${HF_HOME:-$HOME/.cache/huggingface}/hub/models--kyutai--pocket-tts-without-voice-cloning/snapshots"
-    voice="${POCKET_VOICE:-juergen}"
+    voices="${POCKET_VOICES:-juergen stuart_bell michael}"
     for spec in german:1e08e6a23401048648a9fdcfde2f89348215c2a7:4e1e0a3e611c51c0b4ed8174fc10f32a54644303 \
         english:a7056f505a4a8ca72d8b5fb1440071d6f1a35739:00eac05ed3d16bdc3f6b5d598874019c34a89214; do
         lang=${spec%%:*} rest=${spec#*:}
@@ -59,14 +59,20 @@ push_pocket() {
         src="languages/$lang"
         m="$snap/$model/$src/model.safetensors"
         t="$snap/$tok/$src/tokenizer.json"
-        v="$snap/a3055dcb533cf2ec90458008a01e7cef550bae2a/$src/embeddings/$voice.safetensors"
-        if [ ! -e "$m" ] || [ ! -e "$t" ] || [ ! -e "$v" ]; then
+        if [ ! -e "$m" ] || [ ! -e "$t" ]; then
             echo "skipping Pocket $lang: not in the cache (start Pal on the Mac in that language once)" >&2
             continue
         fi
         adb shell mkdir -p "$1/$repo/$src/embeddings"
         adb push "$m" "$t" "$1/$repo/$src/"
-        adb push "$v" "$1/$repo/$src/embeddings/"
+        for voice in $voices; do
+            v="$snap/a3055dcb533cf2ec90458008a01e7cef550bae2a/$src/embeddings/$voice.safetensors"
+            if [ -e "$v" ]; then
+                adb push "$v" "$1/$repo/$src/embeddings/"
+            else
+                echo "skipping Pocket voice $voice ($lang): not in the cache (pick it on the Mac once)" >&2
+            fi
+        done
     done
 }
 

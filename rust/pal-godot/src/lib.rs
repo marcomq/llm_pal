@@ -61,7 +61,7 @@ pub struct PalNode {
     /// The stopped agent until its thread has finished, and a `start` (model dir) waiting for that.
     stopping: Option<Agent>,
     pending_start: Option<GString>,
-    /// Pocket TTS catalog voice, the same in every language.
+    /// Pocket TTS catalog voice for `language`; takes effect on `start`.
     #[export]
     pocket_voice: GString,
     /// "de" or "en": what Pal listens for and speaks; takes effect on `start`.

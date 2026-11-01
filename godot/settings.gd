@@ -1,13 +1,17 @@
 class_name Settings
 extends PanelContainer
-## The settings form: the user's name and where replies come from. Saves to the settings file, emits `saved` and
-## closes; a new one is made for each opening, in the current language.
+## The settings form: the user's name, Pal's voice per language and where replies come from. Saves to the settings
+## file, emits `saved` and closes; a new one is made for each opening, in the current language.
 
 signal saved
 
 const PROVIDERS := ["local", "ollama", "openai", "anthropic"]
 const PROVIDER_NAMES := ["llama (lokal)", "Ollama", "OpenAI", "Anthropic"]
 const DEFAULT_NAME := "Michael"
+## Pocket TTS catalog voices; `build.sh push-models` copies the same list to the phone. The first is the default.
+const VOICES := ["juergen", "stuart_bell", "michael"]
+const VOICE_NAMES := ["Jürgen", "Stuart Bell", "Michael"]
+const LANGUAGES := ["de", "en"]
 ## Shown as placeholders and used while a field is empty.
 const DEFAULT_URLS := {
 	"ollama": "http://localhost:11434/v1", "openai": "https://api.openai.com/v1",
@@ -15,10 +19,12 @@ const DEFAULT_URLS := {
 }
 const DEFAULT_MODELS := {"ollama": "llama3.2", "openai": "gpt-5-mini", "anthropic": "claude-opus-5-5"}
 const TEXTS := {
-	"de": {"title": "Einstellungen", "name": "Dein Name", "llm": "Sprachmodell", "url": "Server-Adresse",
+	"de": {"title": "Einstellungen", "name": "Dein Name", "voice_de": "Stimme Deutsch",
+		"voice_en": "Stimme Englisch", "llm": "Sprachmodell", "url": "Server-Adresse",
 		"model": "Modell", "key": "API-Schlüssel", "fallback": "Bei Serverfehler lokales llama nutzen",
 		"save": "Speichern", "cancel": "Abbrechen"},
-	"en": {"title": "Settings", "name": "Your name", "llm": "Language model", "url": "Server address",
+	"en": {"title": "Settings", "name": "Your name", "voice_de": "German voice", "voice_en": "English voice",
+		"llm": "Language model", "url": "Server address",
 		"model": "Model", "key": "API key", "fallback": "Use local llama when the server fails",
 		"save": "Save", "cancel": "Cancel"},
 }
@@ -27,6 +33,7 @@ var _cfg: ConfigFile
 var _path: String
 var _texts: Dictionary
 var _name := LineEdit.new()
+var _voices := {"de": OptionButton.new(), "en": OptionButton.new()}
 var _provider := OptionButton.new()
 var _url := LineEdit.new()
 var _model := LineEdit.new()
@@ -42,6 +49,12 @@ static func provider(cfg: ConfigFile) -> String:
 static func user_name(cfg: ConfigFile) -> String:
 	var n: String = cfg.get_value("user", "name", "")
 	return n.strip_edges() if not n.strip_edges().is_empty() else DEFAULT_NAME
+
+
+## The saved voice for `lang`, or the default if none or an unknown one is saved.
+static func voice(cfg: ConfigFile, lang: String) -> String:
+	var v: String = cfg.get_value("voice", lang, VOICES[0])
+	return v if v in VOICES else VOICES[0]
 
 
 static func url(cfg: ConfigFile) -> String:
@@ -78,6 +91,10 @@ func _init(cfg: ConfigFile, path: String, lang: String) -> void:
 	form.add_child(title)
 	_field(form, "name", _name)
 	_name.placeholder_text = DEFAULT_NAME
+	for voice_lang in LANGUAGES:
+		for i in VOICES.size():
+			_voices[voice_lang].add_item(VOICE_NAMES[i], i)
+		_field(form, "voice_" + voice_lang, _voices[voice_lang])
 	for i in PROVIDERS.size():
 		_provider.add_item(PROVIDER_NAMES[i], i)
 	_provider.item_selected.connect(func(_i: int) -> void:
@@ -122,6 +139,8 @@ func _field(form: VBoxContainer, key: String, input: Control) -> Control:
 ## Shows the form with the saved values.
 func open() -> void:
 	_name.text = _cfg.get_value("user", "name", "")
+	for lang in LANGUAGES:
+		_voices[lang].select(VOICES.find(voice(_cfg, lang)))
 	_provider.select(maxi(PROVIDERS.find(provider(_cfg)), 0))
 	_url.text = url(_cfg)
 	_model.text = _cfg.get_value("llm", "model", "")
@@ -141,6 +160,8 @@ func _show_provider() -> void:
 
 func _save() -> void:
 	_cfg.set_value("user", "name", _name.text.strip_edges())
+	for lang in LANGUAGES:
+		_cfg.set_value("voice", lang, VOICES[_voices[lang].selected])
 	_cfg.set_value("llm", "provider", PROVIDERS[_provider.selected])
 	_cfg.set_value("llm", "url", _url.text.strip_edges())
 	_cfg.set_value("llm", "model", _model.text.strip_edges())
