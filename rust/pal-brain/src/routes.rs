@@ -137,7 +137,8 @@ fn stream(
     let replied = std::thread::scope(|s| {
         // Sets `stop` on a route cancel even while the model sends nothing; ends as soon as the reply returns.
         let (done, finished) = channel::<()>();
-        s.spawn(|| {
+        let stop = &stop;
+        s.spawn(move || {
             while finished.recv_timeout(CANCEL_POLL).is_err_and(|e| e == RecvTimeoutError::Timeout) {
                 if ctx.is_cancelled() {
                     stop.store(true, Ordering::Relaxed);
