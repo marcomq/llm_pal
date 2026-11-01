@@ -7,9 +7,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use pal_brain::language::Language;
 use pal_brain::llm::{Llm, LlmConfig, LocalLlm};
-use pal_brain::persona::Persona;
+use pal_brain::persona::{DEFAULT_NAME, Persona};
 use pal_brain::prosody_tags::{self, ProsodyTags};
-use pal_brain::stt::{Recognizer, Stt};
+use pal_brain::stt::Recognizer;
 use pal_core::{Event, ProcessorConfig, Segment, SegmenterConfig, process_samples};
 
 fn root() -> PathBuf {
@@ -39,26 +39,9 @@ fn segments() -> Vec<Segment> {
 
 #[test]
 #[ignore = "needs models/ and testdata/"]
-fn whisper_understands_the_test_sentences() {
-    let mut stt = Stt::new(&pal_brain::stt::default_library(), &root().join("models/ggml-small-q5_1.bin")).unwrap();
-    let expected = [&["hallo", "teste"][..], &["zweite", "satz"], &["hörst", "mich"]];
-    let segs = segments();
-    assert_eq!(segs.len(), expected.len());
-    for (seg, words) in segs.iter().zip(expected) {
-        let t = Instant::now();
-        let text = stt.transcribe(&seg.pcm).unwrap();
-        eprintln!("{:.2} s audio -> {} ms: {text}", seg.features.duration_s, t.elapsed().as_millis());
-        let lower = text.to_lowercase();
-        assert!(words.iter().all(|w| lower.contains(w)), "{text:?} lacks {words:?}");
-    }
-    assert_eq!(stt.transcribe(&vec![0.0; 16_000]).unwrap(), "", "silence gives no text");
-}
-
-#[test]
-#[ignore = "needs models/ (with PARAKEET=1) and testdata/"]
 fn parakeet_understands_the_test_sentences() {
     let model = root().join("models/parakeet-tdt-0.6b-v3");
-    let mut stt = Recognizer::new(&pal_brain::stt::default_library(), &model, "de").unwrap();
+    let mut stt = Recognizer::new(&model).unwrap();
     let expected = [&["hallo", "teste"][..], &["zweite", "satz"], &["hörst", "mich"]];
     for (seg, words) in segments().iter().zip(expected) {
         let t = Instant::now();
@@ -70,16 +53,43 @@ fn parakeet_understands_the_test_sentences() {
     assert_eq!(stt.transcribe(&vec![0.0; 16_000]).unwrap(), "", "silence gives no text");
 }
 
-/// STT and LLM in one process (both bundle ggml), through the whole comment chain, plus cancellation.
+/// Per line, what Pal said before the pool (joke, quip or the model) and what it says now. Each line on its own,
+/// without history. `cargo test --release -p pal-brain --test models pool_replies -- --ignored --nocapture`
+#[test]
+#[ignore = "needs models/"]
+fn pool_replies_against_the_model() {
+    let model = LocalLlm::new(&root().join("models/Qwen3.5-2B-Q4_K_M.gguf"), LlmConfig::default()).unwrap();
+    let mut llm = model.session().unwrap();
+    let mut persona = Persona::kitt(Language::German, DEFAULT_NAME);
+    llm.set_fixed_messages(persona.fixed_messages());
+    let never = AtomicBool::new(false);
+    let mut pooled = 0;
+    for line in include_str!("pool_lines_de.txt").lines().filter(|l| !l.trim().is_empty()) {
+        let canned = persona.joke(line).map(|r| ("joke", r)).or_else(|| persona.quip(line).map(|r| ("quip", r)));
+        let before =
+            canned.unwrap_or_else(|| ("model", llm.reply(&persona.messages(line), &never, &mut |_| {}).unwrap()));
+        eprintln!("\n{line}\n  before ({}): {}", before.0, before.1);
+        match persona.pooled(line) {
+            Some(reply) if before.0 == "model" => {
+                pooled += 1;
+                eprintln!("  now    (pool): {reply}");
+            }
+            _ => eprintln!("  now: unchanged"),
+        }
+    }
+    eprintln!("\n{pooled} lines now get a pool reply");
+}
+
+/// STT and LLM in one process, through the whole comment chain, plus cancellation.
 #[test]
 #[ignore = "needs models/ and testdata/"]
 fn llm_comments_on_transcripts_and_stops_when_cancelled() {
-    let mut stt = Stt::new(&pal_brain::stt::default_library(), &root().join("models/ggml-small-q5_1.bin")).unwrap();
+    let mut stt = Recognizer::new(&root().join("models/parakeet-tdt-0.6b-v3")).unwrap();
     let t = Instant::now();
     let model = LocalLlm::new(&root().join("models/Qwen3.5-2B-Q4_K_M.gguf"), LlmConfig::default()).unwrap();
     let mut llm = model.session().unwrap();
     eprintln!("llm load {} ms", t.elapsed().as_millis());
-    let mut persona = Persona::kitt(Language::German);
+    let mut persona = Persona::kitt(Language::German, DEFAULT_NAME);
     let mut tags = ProsodyTags::default();
     let never = AtomicBool::new(false);
     for (turn, seg) in segments().into_iter().enumerate() {

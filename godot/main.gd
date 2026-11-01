@@ -1,7 +1,7 @@
 extends Control
 ## Pal's display: KITT's voice box or HAL's eye, reacting only to Pal's own voice. Space or a tap on the KITT/HAL
 ## label top left switches; L or a tap on the DE/EN label top right switches the language and restarts Pal.
-## S or a tap on the status line switches speech recognition between Whisper and Parakeet and restarts Pal.
+## A tap on … (or S) opens the settings; saving them restarts Pal.
 
 const SETTINGS_PATH := "user://settings.cfg"
 const RECORD_AUDIO := "android.permission.RECORD_AUDIO"
@@ -14,8 +14,6 @@ const RELEASE := 15.0
 ## Bulbs light up fast and glow after for about this long (seconds to 1/e).
 const BULB_ON := 0.02
 const BULB_AFTERGLOW := 0.18
-## Speech recognition models in the model dir; Parakeet comes from `PARAKEET=1 sh scripts/fetch-models.sh`.
-const STT_MODELS := {"whisper": "ggml-small-q5_1.bin", "parakeet": "parakeet-tdt-0.6b-v3"}
 const CENTER_ROWS := 8
 const SIDE_ROWS := 6
 const TEXTS := {
@@ -31,11 +29,12 @@ const TEXTS := {
 @onready var status: Label = $Status
 @onready var language: Label = $Language
 @onready var display: Label = $Display
+@onready var menu: Label = $Menu
 
 var _cfg := ConfigFile.new()
+var _settings: Settings
 var _hal := false
 var _lang := "de"
-var _stt := "whisper"
 var _level := 0.0
 var _phase := 0.0
 var _think := 0.0
@@ -50,12 +49,14 @@ func _ready() -> void:
 	_cfg.load(SETTINGS_PATH)
 	_hal = _cfg.get_value("display", "hal", false)
 	_lang = _cfg.get_value("display", "language", "de")
-	_stt = _cfg.get_value("speech", "stt", "whisper")
 	language.text = _lang.to_upper()
 	_apply_mode()
 	pal.failed.connect(func(msg: String) -> void: _error = msg)
+	pal.reply_failed.connect(func(msg: String) -> void: _error = msg)
 	pal.ready_to_listen.connect(func(device: String) -> void: print("listening: ", device))
-	pal.heard.connect(func(text: String) -> void: print("you: ", text))
+	pal.heard.connect(func(text: String) -> void:
+		_error = ""
+		print("you: ", text))
 	pal.said.connect(func(sentence: String) -> void: print("pal: ", sentence))
 	pal.turn_done.connect(func(stt_ms: int, ms: int) -> void: print("     text after %d ms, first sentence after %d ms" % [stt_ms, ms]))
 	if OS.get_name() != "Android":
@@ -92,13 +93,18 @@ func _start() -> void:
 		DirAccess.make_dir_recursive_absolute(ANDROID_MODELS)
 	_error = ""
 	pal.language = _lang
-	pal.stt_model = STT_MODELS[_stt]
 	var llm := OS.get_environment("PAL_LLM")
 	if not llm.is_empty():
 		pal.llm_model = llm
 	pal.smart_turn = OS.get_environment("PAL_SMART_TURN") != "0"
 	pal.barge_in = OS.get_environment("PAL_BARGE_IN") != "0"
-	pal.start(_model_dir(), _stt_library())
+	pal.user_name = Settings.user_name(_cfg)
+	pal.llm_provider = Settings.provider(_cfg)
+	pal.llm_url = Settings.url(_cfg)
+	pal.llm_remote_model = Settings.model(_cfg)
+	pal.llm_api_key = _cfg.get_value("llm", "api_key", "")
+	pal.llm_fallback = _cfg.get_value("llm", "fallback", false)
+	pal.start(_model_dir())
 
 
 ## PAL_MODELS overrides the models/ folder next to the Godot project (desktop) or the app folder (Android).
@@ -110,12 +116,6 @@ func _model_dir() -> String:
 		return ANDROID_MODELS
 	return ProjectSettings.globalize_path("res://").path_join("../models").simplify_path()
 
-
-## On Android the library sits in the APK's native folder, so the loader finds it by name.
-func _stt_library() -> String:
-	if OS.get_name() == "Android":
-		return "libpal_stt.so"
-	return ProjectSettings.globalize_path("res://bin/macos/libpal_stt.dylib")
 
 
 func _process(delta: float) -> void:
@@ -159,7 +159,7 @@ func _state_text(state: int) -> String:
 		PalNode.LOADING:
 			key = "loading"
 		PalNode.LISTENING:
-			return TEXTS[_lang]["listening"] + " · " + _stt + (" •" if pal.hearing() else "")
+			return TEXTS[_lang]["listening"] + (" •" if pal.hearing() else "")
 		PalNode.THINKING:
 			key = "thinking"
 		PalNode.SPEAKING:
@@ -169,19 +169,21 @@ func _state_text(state: int) -> String:
 
 ## _input, not _unhandled_input: this Control consumes clicks and touches before they would get there.
 func _input(event: InputEvent) -> void:
+	if is_instance_valid(_settings):
+		return
 	var key := event as InputEventKey
 	var click := event as InputEventMouseButton
 	var pressed_key := key != null and key.pressed and not key.echo
 	var tapped := click != null and click.pressed
 	if (pressed_key and key.keycode == KEY_L) or (tapped and language.get_global_rect().has_point(click.position)):
 		_switch_language()
+	elif (pressed_key and key.keycode == KEY_S) or (tapped and menu.get_global_rect().has_point(click.position)):
+		_open_settings()
 	elif (pressed_key and key.keycode == KEY_SPACE) or (tapped and display.get_global_rect().has_point(click.position)):
 		_hal = not _hal
 		_apply_mode()
 		_cfg.set_value("display", "hal", _hal)
 		_cfg.save(SETTINGS_PATH)
-	elif (pressed_key and key.keycode == KEY_S) or (tapped and status.get_global_rect().has_point(click.position)):
-		_switch_stt()
 
 
 func _switch_language() -> void:
@@ -192,11 +194,12 @@ func _switch_language() -> void:
 	_restart()
 
 
-func _switch_stt() -> void:
-	_stt = "parakeet" if _stt == "whisper" else "whisper"
-	_cfg.set_value("speech", "stt", _stt)
-	_cfg.save(SETTINGS_PATH)
-	_restart()
+
+func _open_settings() -> void:
+	_settings = Settings.new(_cfg, SETTINGS_PATH, _lang)
+	_settings.saved.connect(_restart)
+	add_child(_settings)
+	_settings.open()
 
 
 func _restart() -> void:

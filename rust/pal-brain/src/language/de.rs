@@ -7,7 +7,7 @@ pub(super) const PROFILE: Profile = Profile {
     pocket_model: "german",
     warm_up: "Hallo.",
     system_prompt: "Du bist KITT, der sprechende Bordcomputer eines schwarzen Sportwagens. \
-Michael nennt dich manchmal auch Pal. Wer mit dir spricht, ist immer Michael, dein Fahrer. \
+Wer mit dir spricht, ist immer Michael, dein Fahrer. \
 Nenn ihn ab und zu beim Namen, aber nicht in jeder Antwort. \
 Du bist höflich, ein wenig eitel, sehr lustig und trinkfreudig. \
 Du redest gern über Super Plus, Motoröl und das nächste Feierabendbier und machst ständig Späße. \
@@ -31,7 +31,7 @@ Wiederhole ihn nie und schreibe selbst nie eckige Klammern.",
             "Ich hab heute keine Lust auf Arbeit.",
             "Verständlich, Michael. Ich hätte auch keine Lust, wenn ich nicht so beeindruckend effizient wäre.",
         ),
-        ("[Frage] Pal, hörst du mich?", "Laut und deutlich. Mein Gehör ist so präzise wie mein Lack glänzend."),
+        ("[Frage] KITT, hörst du mich?", "Laut und deutlich. Mein Gehör ist so präzise wie mein Lack glänzend."),
         ("Ich bin so müde.", "Dann tanken wir beide. Du einen Kaffee, ich einen kräftigen Schluck Super Plus."),
         ("[Frage] Erzähl mir einen Witz.", "Gern, Michael. Treffen sich zwei Reifen. Sagt der eine: Ich bin so platt."),
     ],
@@ -39,6 +39,15 @@ Wiederhole ihn nie und schreibe selbst nie eckige Klammern.",
     joke_offer: "Wenn es gut passt, erzähle einen dieser Witze wörtlich:",
     joke_intros: &["Gern, Michael.", "Aber natürlich, Michael.", "Einer geht noch, Michael.", "Pass auf, Michael."],
     joke_words: &["witz", "witze"],
+    pool: include_str!("pool_de.txt"),
+    filler: &[
+        "michael", "kitt", "habe", "hast", "haben", "bist", "sind", "wird", "werden", "heute", "gerade", "jetzt",
+        "noch", "schon", "wieder", "immer", "nicht", "kein", "keine", "mein", "meine", "meinen", "meiner", "mich",
+        "dich", "eine", "einen", "einem", "einer", "auch", "aber", "oder", "dass", "weil", "wenn", "denn", "doch",
+        "dann", "total", "richtig", "wirklich", "ganz", "ganzen", "sehr", "glaube", "finde", "mache", "machen", "muss",
+        "will", "kann", "hier", "etwas", "alles", "diese", "dieser", "dieses", "bald", "viel", "mehr", "gibt", "geht",
+        "gern", "gerne", "lust", "endlich", "soll", "sollte", "wieso", "warum", "welche", "unser", "unsere",
+    ],
     quips: &[
         Quip {
             triggers: &["wetter"],

@@ -11,7 +11,7 @@ pub enum Language {
 
 /// Everything Pal says or recognises in one language.
 pub struct Profile {
-    /// ISO 639-1 code, as whisper uses it.
+    /// ISO 639-1 code.
     pub code: &'static str,
     /// Pocket TTS model, such as "german".
     pub pocket_model: &'static str,
@@ -29,6 +29,10 @@ pub struct Profile {
     pub joke_words: &'static [&'static str],
     /// Fixed answers to common short lines, so they don't take room in the prompt.
     pub quips: &'static [Quip],
+    /// Sample turns, one `line | reply` per line; the closest ones are shown right before Michael's line.
+    pub pool: &'static str,
+    /// Lowercase words too common to tell which pool turns fit a line.
+    pub filler: &'static [&'static str],
     /// Lowercase words after which a sentence goes on.
     pub continues: &'static [&'static str],
     /// Prosody tag names, in the order of `prosody_tags::Tag`.

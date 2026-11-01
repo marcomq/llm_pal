@@ -5,19 +5,62 @@ use godot::classes::{INode, Node};
 use godot::prelude::*;
 use pal_brain::agent::{Agent, AgentConfig, AgentEvent, State};
 use pal_brain::language::Language;
+use pal_brain::remote::{Provider, RemoteConfig};
 
 struct PalExtension;
 
 #[gdextension]
-unsafe impl ExtensionLibrary for PalExtension {}
+unsafe impl ExtensionLibrary for PalExtension {
+    fn on_stage_init(stage: godot::init::InitStage) {
+        #[cfg(target_os = "android")]
+        if stage == godot::init::InitStage::Scene {
+            logcat::forward_stderr();
+        }
+        let _ = stage;
+    }
+}
+
+/// Android drops a native library's stderr; this sends its lines (`llm_pal: ...`) to logcat, tag "llm_pal".
+#[cfg(target_os = "android")]
+mod logcat {
+    use std::ffi::{CString, c_char};
+    use std::io::{BufRead, BufReader};
+    use std::os::fd::FromRawFd;
+
+    #[link(name = "log")]
+    unsafe extern "C" {
+        fn __android_log_write(priority: i32, tag: *const c_char, text: *const c_char) -> i32;
+    }
+    const INFO: i32 = 4;
+
+    pub fn forward_stderr() {
+        let mut fds = [0; 2];
+        // SAFETY: `pipe` fills both fds; fd 2 becomes a copy of the write end, which is then closed.
+        let read = unsafe {
+            if libc::pipe(fds.as_mut_ptr()) != 0 || libc::dup2(fds[1], 2) < 0 {
+                return;
+            }
+            libc::close(fds[1]);
+            std::fs::File::from_raw_fd(fds[0])
+        };
+        std::thread::spawn(move || {
+            for line in BufReader::new(read).lines().map_while(Result::ok) {
+                if let Ok(text) = CString::new(line) {
+                    // SAFETY: both strings are NUL-terminated and outlive the call.
+                    unsafe { __android_log_write(INFO, c"llm_pal".as_ptr(), text.as_ptr()) };
+                }
+            }
+        });
+    }
+}
 
 #[derive(GodotClass)]
 #[class(base = Node)]
 pub struct PalNode {
     agent: Option<Agent>,
-    /// The stopped agent until its thread has finished, and a `start` (model dir, STT library) waiting for that.
+    /// The stopped agent until its thread has finished, and a `start` (model dir) waiting for that.
     stopping: Option<Agent>,
-    pending_start: Option<(GString, GString)>,
+    pending_start: Option<GString>,
     /// Pocket TTS catalog voice, the same in every language.
     #[export]
     pocket_voice: GString,
@@ -33,9 +76,26 @@ pub struct PalNode {
     /// GGUF file name in the model dir; takes effect on `start`.
     #[export]
     llm_model: GString,
-    /// Whisper `.bin` file or Parakeet folder in the model dir; takes effect on `start`.
+    /// Parakeet TDT folder in the model dir; takes effect on `start`.
     #[export]
     stt_model: GString,
+    /// How Pal addresses the user; takes effect on `start`.
+    #[export]
+    user_name: GString,
+    /// "local", "ollama", "openai" or "anthropic"; takes effect on `start`.
+    #[export]
+    llm_provider: GString,
+    /// The server's API base; empty for the provider's default.
+    #[export]
+    llm_url: GString,
+    /// The model name on the server.
+    #[export]
+    llm_remote_model: GString,
+    #[export]
+    llm_api_key: GString,
+    /// The local model answers when the server fails; it is loaded only then.
+    #[export]
+    llm_fallback: bool,
     base: Base<Node>,
 }
 
@@ -51,7 +111,13 @@ impl INode for PalNode {
             barge_in: true,
             smart_turn: true,
             llm_model: "Qwen3.5-2B-Q4_K_M.gguf".into(),
-            stt_model: "ggml-small-q5_1.bin".into(),
+            stt_model: "parakeet-tdt-0.6b-v3".into(),
+            user_name: pal_brain::persona::DEFAULT_NAME.into(),
+            llm_provider: "local".into(),
+            llm_url: GString::new(),
+            llm_remote_model: GString::new(),
+            llm_api_key: GString::new(),
+            llm_fallback: false,
             base,
         }
     }
@@ -59,8 +125,8 @@ impl INode for PalNode {
     fn process(&mut self, _delta: f64) {
         if self.stopping.as_ref().is_some_and(Agent::is_finished) {
             self.stopping = None;
-            if let Some((model_dir, stt_library)) = self.pending_start.take() {
-                self.start(model_dir, stt_library);
+            if let Some(model_dir) = self.pending_start.take() {
+                self.start(model_dir);
             }
         }
         while let Some(event) = self.agent.as_ref().and_then(Agent::poll) {
@@ -74,6 +140,7 @@ impl INode for PalNode {
                 }
                 AgentEvent::Interrupted => s.interrupted().emit(),
                 AgentEvent::Ignored => s.ignored().emit(),
+                AgentEvent::ReplyFailed(e) => s.reply_failed().emit(&GString::from(&e)),
                 AgentEvent::Failed(e) => s.failed().emit(&GString::from(&e)),
             }
         }
@@ -99,6 +166,9 @@ impl PalNode {
     fn ignored();
     #[signal]
     fn failed(message: GString);
+    /// A turn got no reply, e.g. the LLM server isn't reachable; Pal keeps listening.
+    #[signal]
+    fn reply_failed(message: GString);
 
     #[constant]
     const LOADING: i32 = State::Loading as i32;
@@ -111,12 +181,12 @@ impl PalNode {
     #[constant]
     const STOPPED: i32 = State::Stopped as i32;
 
-    /// Absolute paths: `model_dir` holds silero_vad.onnx, the STT and the Qwen model; `stt_library` is libpal_stt.
+    /// Absolute path: `model_dir` holds silero_vad.onnx, the STT and the Qwen model.
     /// After `stop`, the new agent starts once the old one has finished.
     #[func]
-    fn start(&mut self, model_dir: GString, stt_library: GString) {
+    fn start(&mut self, model_dir: GString) {
         if self.stopping.is_some() {
-            self.pending_start = Some((model_dir, stt_library));
+            self.pending_start = Some(model_dir);
             return;
         }
         let dir = std::path::PathBuf::from(model_dir.to_string());
@@ -125,9 +195,25 @@ impl PalNode {
             self.signals().failed().emit(&message);
             return;
         };
-        // Android can't download Pocket's model (its TLS check needs Java code), so `push-models` copies it.
-        #[cfg(target_os = "android")]
-        if !pal_brain::pocket_speaker::use_local_files(&dir.join("pocket"), language) {
+        let provider = self.llm_provider.to_string();
+        let remote = match Provider::parse(&provider) {
+            Some(provider) => Some(RemoteConfig {
+                provider,
+                url: self.llm_url.to_string(),
+                model: self.llm_remote_model.to_string(),
+                api_key: self.llm_api_key.to_string(),
+            }),
+            None if provider == "local" => None,
+            None => {
+                self.signals().failed().emit(&format!("unknown llm provider {provider}"));
+                return;
+            }
+        };
+        let user_name = self.user_name.to_string();
+        // Pocket's model comes from `model_dir/pocket` if it's there (`push-models` copies it). Android can't
+        // download it (its TLS check needs Java code); the desktop downloads it otherwise.
+        let local = pal_brain::pocket_speaker::use_local_files(&dir.join("pocket"), language);
+        if cfg!(target_os = "android") && !local {
             let message = format!("no Pocket TTS model in {}/pocket", dir.display());
             self.signals().failed().emit(&message);
             return;
@@ -136,12 +222,14 @@ impl PalNode {
             vad_model: dir.join("silero_vad.onnx"),
             turn_model: Some(dir.join("smart-turn-v3.2-cpu.onnx")).filter(|p| self.smart_turn && p.exists()),
             device: None,
-            stt_library: stt_library.to_string().into(),
             stt_model: dir.join(self.stt_model.to_string()),
             llm_model: dir.join(self.llm_model.to_string()),
             voice: self.pocket_voice.to_string(),
             barge_in: self.barge_in,
             language,
+            user_name: if user_name.trim().is_empty() { pal_brain::persona::DEFAULT_NAME.into() } else { user_name },
+            remote,
+            fallback: self.llm_fallback,
         }));
     }
 

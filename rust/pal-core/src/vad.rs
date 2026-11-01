@@ -26,6 +26,11 @@ pub fn environment() -> Result<&'static Environment, Error> {
         .map_err(|e| Error::Vad(format!("ONNX Runtime did not start: {e}")))
 }
 
+/// Runs every model in `env` instead of starting its own; ort allows one per process. False if one is set already.
+pub fn use_environment(env: Environment) -> bool {
+    ENVIRONMENT.set(Ok(env)).is_ok()
+}
+
 pub struct SileroVad {
     session: Session,
     state: [f32; STATE_LEN],

@@ -10,3 +10,6 @@ crate-type = ["cdylib"]
 [dependencies]
 pal-brain = { path = "../pal-brain" }
 godot = { version = "0.5.5", features = ["api-4-7"] }
+
+[target.'cfg(target_os = "android")'.dependencies]
+libc = "0.2"

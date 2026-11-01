@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["pal-core", "pal-brain", "pal-stt", "pal-godot", "pal-tts"]
+members = ["pal-core", "pal-brain", "pal-godot", "pal-tts"]
 
 [workspace.package]
 version = "0.1.0"

@@ -1,7 +1,6 @@
 //! The conversation loop on its own thread: microphone -> segment -> STT -> LLM -> sentences -> speech.
 //! Readers such as a UI poll `state()` and `level()` lock-free and drain `poll()` for texts.
 
-use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
@@ -12,14 +11,15 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use pal_core::playback::PlaybackState;
 use pal_core::{Event, Processor, ProcessorConfig, Segment, SegmenterConfig};
 
-use crate::Result;
 use crate::language::Language;
-use crate::llm::{Llm, LlmConfig, LlmSession, LocalLlm};
+use crate::llm::{LlmConfig, LocalLlm};
 use crate::persona::Persona;
 use crate::pocket_speaker::PocketSpeaker;
 use crate::prosody_tags::{self, ProsodyTags};
-use crate::sentences::Sentences;
+use crate::remote::{RemoteConfig, RemoteLlm};
+use crate::routes::{Brain, ReplyRoutes, Spoken};
 use crate::stt::Recognizer;
+use crate::{Error, Result};
 
 pub struct AgentConfig {
     pub vad_model: PathBuf,
@@ -27,8 +27,7 @@ pub struct AgentConfig {
     pub turn_model: Option<PathBuf>,
     /// Part of the input device name.
     pub device: Option<String>,
-    pub stt_library: PathBuf,
-    /// A Whisper `.bin` file (through `stt_library`) or a Parakeet TDT folder.
+    /// The Parakeet TDT folder.
     pub stt_model: PathBuf,
     pub llm_model: PathBuf,
     /// Kyutai Pocket TTS catalog voice, such as "juergen".
@@ -37,6 +36,12 @@ pub struct AgentConfig {
     /// ignored.
     pub barge_in: bool,
     pub language: Language,
+    /// The user's name, as the texts address them; [`crate::persona::DEFAULT_NAME`] by default.
+    pub user_name: String,
+    /// A server answers instead of `llm_model`, which then isn't loaded unless `fallback` is set.
+    pub remote: Option<RemoteConfig>,
+    /// With `remote`, the local model answers when the server fails.
+    pub fallback: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -69,6 +74,8 @@ pub enum AgentEvent {
     Interrupted,
     /// Speech during output without barge-in.
     Ignored,
+    /// The model failed on a turn, e.g. a server that isn't reachable; the agent keeps listening.
+    ReplyFailed(String),
     /// The agent stopped.
     Failed(String),
 }
@@ -153,19 +160,6 @@ impl Drop for Agent {
     }
 }
 
-/// Numbers as words, and words the voice reads wrong respelled.
-fn pronounced(text: &str, language: Language) -> String {
-    let text = crate::numbers::spell(text, language);
-    language.profile().pronunciations.iter().fold(text, |t, (word, spoken)| t.replace(word, spoken))
-}
-
-fn route(sentence: String, held: &mut Option<Vec<String>>, speak: &mut dyn FnMut(String)) {
-    match held {
-        Some(h) => h.push(sentence),
-        None => speak(sentence),
-    }
-}
-
 const LIVE_TIMEOUT: Duration = Duration::from_secs(5);
 /// Extra silence Pal waits for after a transcript that doesn't sound finished.
 const UNFINISHED_WAIT: Duration = Duration::from_millis(700);
@@ -185,26 +179,67 @@ fn speech_end(at: Instant, seg: &Segment) -> Instant {
     at.checked_sub(Duration::from_millis(seg.silence_ms)).unwrap_or(at)
 }
 
-/// The first transcription and the first prompt are slow; this runs both before Pal listens and leaves the system
-/// prompt in the LLM's cache.
-fn warm_up(stt: &mut Recognizer, llm: &mut LlmSession, persona: &Persona) -> Result<()> {
-    stt.transcribe(&[0.0; 16_000])?;
-    llm.prefill(&persona.context())
+fn joined<T>(loader: std::thread::JoinHandle<Result<T>>, error: fn(String) -> Error) -> Result<T> {
+    loader.join().unwrap_or_else(|_| Err(error("loading panicked".into())))
 }
 
-/// Moves waiting events to `backlog`; true if one of them was a barge-in.
-fn barged_in(mut waiting: impl FnMut() -> Option<Event>, backlog: &mut VecDeque<Event>) -> bool {
-    let mut barged = false;
-    while let Some(event) = waiting() {
-        match event {
-            Event::BargeIn { .. } => barged = true,
-            event => backlog.push_back(event),
+/// Waits until the first prompt, which is slow, has left the system prompt in the LLM's cache.
+fn prefilled(inbox: &Inbox) -> Result<()> {
+    loop {
+        match inbox.rx.recv() {
+            Ok(Input::Spoken(Spoken::Prefilled)) => return Ok(()),
+            Ok(Input::Spoken(Spoken::Failed { error, .. })) => return Err(Error::Llm(error)),
+            Ok(_) => {}
+            Err(_) => return Err(Error::Routes("reply routes stopped".into())),
         }
     }
-    barged
 }
 
-/// `PAL_RECORD_DIR`: each segment as 16 kHz WAV plus the recognised text, test data for tests/stt_compare.rs.
+enum Input {
+    Event(Event),
+    Spoken(Spoken),
+}
+
+/// Microphone events and route reports in arrival order, with what was set aside for later.
+struct Inbox {
+    rx: Receiver<Input>,
+    events: VecDeque<Event>,
+    spoken: VecDeque<Spoken>,
+}
+
+impl Inbox {
+    /// Set-aside reports come first, then set-aside events if `events`, then new input.
+    fn recv(&mut self, timeout: Duration, events: bool) -> Option<Input> {
+        if let Some(s) = self.spoken.pop_front() {
+            return Some(Input::Spoken(s));
+        }
+        let waiting = if events { self.events.pop_front() } else { None };
+        waiting.map(Input::Event).or_else(|| self.rx.recv_timeout(timeout).ok())
+    }
+
+    /// True if the user speaks again within `UNFINISHED_WAIT`; other events are dropped.
+    fn goes_on(&mut self) -> bool {
+        let until = Instant::now() + UNFINISHED_WAIT;
+        let mut kept = Vec::new();
+        let mut speaks = false;
+        while let Some(left) = until.checked_duration_since(Instant::now()) {
+            let next = self.events.pop_front().map(Input::Event).or_else(|| self.rx.recv_timeout(left).ok());
+            match next {
+                Some(Input::Event(Event::SpeechStart { .. })) => {
+                    speaks = true;
+                    break;
+                }
+                Some(Input::Spoken(s)) => kept.push(s),
+                Some(_) => {}
+                None => break,
+            }
+        }
+        self.spoken.extend(kept);
+        speaks
+    }
+}
+
+/// `PAL_RECORD_DIR`: each segment as 16 kHz WAV plus the recognised text, as STT test data.
 fn record(dir: &Path, pcm: &[f32], text: &str) -> std::result::Result<(), Box<dyn std::error::Error>> {
     std::fs::create_dir_all(dir)?;
     let name = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis().to_string();
@@ -226,11 +261,34 @@ fn record(dir: &Path, pcm: &[f32], text: &str) -> std::result::Result<(), Box<dy
 fn converse(cfg: &AgentConfig, shared: &Shared, tx: &Sender<AgentEvent>) -> Result<()> {
     let send = |e| drop(tx.send(e));
     let record_dir = std::env::var_os("PAL_RECORD_DIR").map(PathBuf::from);
-    let mut stt = Recognizer::new(&cfg.stt_library, &cfg.stt_model, cfg.language.code())?;
-    let model = LocalLlm::new(&cfg.llm_model, LlmConfig::default())?;
-    let mut llm = model.session()?;
-    let mut speaker = PocketSpeaker::new(&cfg.voice, cfg.language)?;
-    let _ = shared.output.set(speaker.output());
+    // Speech recognition, voice and LLM load side by side; the first transcription is slow, so it runs here too.
+    let t0 = Instant::now();
+    let took = move |what: &str| eprintln!("llm_pal: {what} after {} ms", t0.elapsed().as_millis());
+    let stt = std::thread::spawn({
+        let model = cfg.stt_model.clone();
+        move || {
+            let stt = Recognizer::new(&model).and_then(|mut stt| stt.transcribe(&[0.0; 16_000]).map(|_| stt));
+            took("speech recognition ready");
+            stt
+        }
+    });
+    let pocket = std::thread::spawn({
+        let (voice, language) = (cfg.voice.clone(), cfg.language);
+        move || {
+            let speaker = PocketSpeaker::new(&voice, language);
+            took("voice ready");
+            speaker
+        }
+    });
+    let local = || LocalLlm::new(&cfg.llm_model, LlmConfig::default());
+    let brain = match &cfg.remote {
+        None => Brain::Local(local()?),
+        Some(remote) => {
+            let fallback = if cfg.fallback { Some(local()?) } else { None };
+            Brain::Remote { server: RemoteLlm::new(remote.clone()), fallback }
+        }
+    };
+    took("llm loaded");
     let pcfg = ProcessorConfig {
         vad_model: cfg.vad_model.clone(),
         segmenter: SegmenterConfig::default(),
@@ -238,11 +296,29 @@ fn converse(cfg: &AgentConfig, shared: &Shared, tx: &Sender<AgentEvent>) -> Resu
         drop_echo: !cfg.barge_in,
         turn_model: cfg.turn_model.clone(),
     };
-    let mut persona = Persona::kitt(cfg.language);
-    llm.set_fixed_messages(persona.fixed_messages());
-    warm_up(&mut stt, &mut llm, &persona)?;
+    let mut persona = Persona::kitt(cfg.language, &cfg.user_name);
+    let (input, rx) = channel();
+    let report = input.clone();
+    let report = move |s| drop(report.send(Input::Spoken(s)));
+    let (speaker_tx, speaker_rx) = channel();
+    let routes = ReplyRoutes::start(brain, persona.fixed_messages(), speaker_rx, cfg.language, report)?;
+    let mut inbox = Inbox { rx, events: VecDeque::new(), spoken: VecDeque::new() };
+    routes.prefill(&persona.context())?;
+    let mut stt = joined(stt, Error::Stt)?;
+    let mut speaker = joined(pocket, Error::Tts)?;
+    let _ = speaker_tx.send(speaker.clone());
+    let _ = shared.output.set(speaker.output());
+    prefilled(&inbox)?;
+    took("llm prefilled");
     let echo = cfg.barge_in.then(|| speaker.output().take_echo_reference()).flatten();
     let (processor, events) = Processor::start(&pcfg, echo)?;
+    std::thread::spawn(move || {
+        for e in events {
+            if input.send(Input::Event(e)).is_err() {
+                break;
+            }
+        }
+    });
     let active = processor.output_active();
     let _ = shared.hearing.set(processor.in_speech());
     if !processor.wait_live(LIVE_TIMEOUT) {
@@ -251,31 +327,15 @@ fn converse(cfg: &AgentConfig, shared: &Shared, tx: &Sender<AgentEvent>) -> Resu
     send(AgentEvent::Ready { device: processor.device_name().to_string() });
 
     let mut tags = ProsodyTags::default();
-    // Events that arrived while a reply was generated; `recv` takes them first.
-    let backlog = RefCell::new(VecDeque::new());
-    let recv = |timeout: Duration| {
-        let waiting = backlog.borrow_mut().pop_front();
-        waiting.map_or_else(|| events.recv_timeout(timeout), Ok)
-    };
     // Speech of an unfinished sentence, put before the next segment.
-    let carry = RefCell::new(None::<Vec<f32>>);
-    // True if the user speaks again within `UNFINISHED_WAIT`.
-    let goes_on = || {
-        let until = Instant::now() + UNFINISHED_WAIT;
-        while let Some(left) = until.checked_duration_since(Instant::now()) {
-            match recv(left) {
-                Ok(Event::SpeechStart { .. }) => return true,
-                Ok(_) => {}
-                Err(_) => return false,
-            }
-        }
-        false
-    };
+    let mut carry = None::<Vec<f32>>;
+    let mut turns = 0u64;
     while !shared.quit.load(Ordering::SeqCst) {
         let speaking = speaker.speaking();
         active.store(speaking, Ordering::Relaxed);
         shared.set(if speaking { State::Speaking } else { State::Listening });
-        let Ok(event) = recv(Duration::from_millis(20)) else { continue };
+        // Reports of earlier turns are stale here.
+        let Some(Input::Event(event)) = inbox.recv(Duration::from_millis(20), true) else { continue };
         // A reply to a pause is prepared but held back until the segment really ends.
         let (seg, early) = match event {
             Event::SpeechStart { .. } | Event::Resume => continue,
@@ -290,7 +350,7 @@ fn converse(cfg: &AgentConfig, shared: &Shared, tx: &Sender<AgentEvent>) -> Resu
             Event::Segment(seg) => (seg, false),
         };
         let mut seg = seg;
-        if let Some(before) = carry.borrow().as_ref() {
+        if let Some(before) = &carry {
             seg.pcm = [before.as_slice(), &seg.pcm].concat();
         }
         // Without barge-in, speech that overlaps Pal's output is ignored: it may be Pal's own voice.
@@ -321,91 +381,89 @@ fn converse(cfg: &AgentConfig, shared: &Shared, tx: &Sender<AgentEvent>) -> Resu
             continue;
         }
         if !early {
-            if !seg.turn_complete && sounds_unfinished(&text, cfg.language) && goes_on() {
-                *carry.borrow_mut() = Some(seg.pcm);
+            if !seg.turn_complete && sounds_unfinished(&text, cfg.language) && inbox.goes_on() {
+                carry = Some(seg.pcm);
                 continue;
             }
-            carry.take();
+            carry = None;
         }
         let line = Persona::user_line(&text, &prosody_tags::format(&tags.tag(&seg.features), cfg.language));
 
-        let ended = Cell::new(if early { None } else { Some(speech_end(t0, &seg)) });
-        let mut held = early.then(Vec::new);
-        let mut discarded = false;
-        let stop = AtomicBool::new(false);
-        let mut interrupted = false;
-        let mut sentences = Sentences::new(cfg.language);
-        let mut spoken = Vec::new();
-        let mut first_sentence_ms = None;
-        let mut speak = |s: String| {
-            first_sentence_ms.get_or_insert(ended.get().map_or(0, |t| t.elapsed().as_millis()));
-            if let Err(e) = speaker.say(&pronounced(&s, cfg.language)) {
-                eprintln!("{e}");
-            }
-            active.store(true, Ordering::Relaxed);
-            shared.set(State::Speaking);
-            send(AgentEvent::Said(s.clone()));
-            spoken.push(s);
-        };
-        // Settles a held reply once the segment ends (speak it) or the user goes on (drop it).
-        let settle =
-            |held: &mut Option<Vec<String>>, discarded: &mut bool, wait: bool, speak: &mut dyn FnMut(String)| {
-                while held.is_some() && !*discarded && !shared.quit.load(Ordering::SeqCst) {
-                    let event = match recv(if wait { Duration::from_millis(20) } else { Duration::ZERO }) {
-                        Ok(e) => e,
-                        Err(e) if wait && e.is_timeout() => continue,
-                        Err(_) => break,
-                    };
-                    match event {
-                        Event::Resume => *discarded = true,
-                        Event::Segment(end) => {
-                            if !end.turn_complete && sounds_unfinished(&text, cfg.language) && goes_on() {
-                                let before = carry.take().unwrap_or_default();
-                                *carry.borrow_mut() = Some([before, end.pcm].concat());
-                                *discarded = true;
-                                continue;
-                            }
-                            carry.take();
-                            send(AgentEvent::Heard(line.clone()));
-                            ended.set(Some(speech_end(Instant::now(), &end)));
-                            held.take().into_iter().flatten().for_each(&mut *speak);
-                        }
-                        _ => {}
-                    }
-                }
-            };
+        turns += 1;
+        let turn = format!("turn-{turns}");
         if !early {
             send(AgentEvent::Heard(line.clone()));
         }
-        if let Some(canned) = persona.joke(&text).or_else(|| persona.quip(&text)) {
-            sentences.push(&canned).into_iter().for_each(|s| route(s, &mut held, &mut speak));
-        } else {
-            let replied = llm.reply(&persona.messages(&line), &stop, &mut |piece| {
-                interrupted |=
-                    cfg.barge_in && held.is_none() && barged_in(|| events.try_recv().ok(), &mut backlog.borrow_mut());
-                if !interrupted {
-                    sentences.push(piece).into_iter().for_each(|s| route(s, &mut held, &mut speak));
-                    settle(&mut held, &mut discarded, false, &mut speak);
+        let canned = persona.joke(&text).or_else(|| persona.quip(&text)).or_else(|| persona.pooled(&text));
+        let started = match canned {
+            Some(canned) => routes.canned(&turn, &canned, early),
+            None => routes.reply(&turn, &persona.messages(&line), early),
+        };
+        if let Err(e) = started {
+            eprintln!("llm_pal: {e}");
+            tags = tags_before;
+            continue;
+        }
+
+        let mut ended = (!early).then(|| speech_end(t0, &seg));
+        let mut held = early;
+        let mut spoken = Vec::new();
+        let mut first_sentence_ms = None;
+        let mut finished = false;
+        while !shared.quit.load(Ordering::SeqCst) {
+            // A held reply settles on the segment's end (speak it) or the user going on (drop it); other events
+            // wait until the turn is over.
+            let Some(input) = inbox.recv(Duration::from_millis(20), held) else { continue };
+            match input {
+                Input::Spoken(Spoken::Said { turn: of, text: said, at }) if of == turn => {
+                    first_sentence_ms.get_or_insert(ended.map_or(0, |e| at.saturating_duration_since(e).as_millis()));
+                    active.store(true, Ordering::Relaxed);
+                    shared.set(State::Speaking);
+                    send(AgentEvent::Said(said.clone()));
+                    spoken.push(said);
                 }
-                if interrupted || discarded || shared.quit.load(Ordering::SeqCst) {
-                    stop.store(true, Ordering::Relaxed);
+                Input::Spoken(Spoken::Done { turn: of }) if of == turn => {
+                    finished = true;
+                    break;
                 }
-            });
-            if let Err(e) = replied {
-                eprintln!("llm_pal: {e}");
-                tags = tags_before;
-                continue;
+                Input::Spoken(Spoken::Failed { turn: of, error }) if of == turn => {
+                    eprintln!("llm_pal: {error}");
+                    send(AgentEvent::ReplyFailed(error));
+                    break;
+                }
+                Input::Spoken(_) => {}
+                Input::Event(Event::BargeIn { .. }) if !held && cfg.barge_in => {
+                    if let Err(e) = routes.interrupt(&turn) {
+                        eprintln!("llm_pal: {e}");
+                    }
+                    speaker.stop();
+                    send(AgentEvent::Interrupted);
+                    finished = true;
+                    break;
+                }
+                Input::Event(event) if !held => inbox.events.push_back(event),
+                Input::Event(Event::Resume) => break,
+                Input::Event(Event::Segment(end)) => {
+                    if !end.turn_complete && sounds_unfinished(&text, cfg.language) && inbox.goes_on() {
+                        carry = Some([carry.take().unwrap_or_default(), end.pcm].concat());
+                        break;
+                    }
+                    carry = None;
+                    send(AgentEvent::Heard(line.clone()));
+                    ended = Some(speech_end(Instant::now(), &end));
+                    held = false;
+                    if let Err(e) = routes.release(&turn) {
+                        eprintln!("llm_pal: {e}");
+                        break;
+                    }
+                }
+                Input::Event(_) => {}
             }
         }
-        if !interrupted {
-            sentences.finish().into_iter().for_each(|s| route(s, &mut held, &mut speak));
-        }
-        settle(&mut held, &mut discarded, true, &mut speak);
-        if interrupted {
-            speaker.stop();
-            send(AgentEvent::Interrupted);
-        }
-        if discarded || held.is_some() {
+        if !finished {
+            if let Err(e) = routes.discard(&turn) {
+                eprintln!("llm_pal: {e}");
+            }
             tags = tags_before;
             continue;
         }
@@ -414,10 +472,10 @@ fn converse(cfg: &AgentConfig, shared: &Shared, tx: &Sender<AgentEvent>) -> Resu
             reply: reply.clone(),
             stt_ms,
             first_sentence_ms,
-            total_ms: ended.get().unwrap_or(t0).elapsed().as_millis(),
+            total_ms: ended.unwrap_or(t0).elapsed().as_millis(),
         });
         persona.remember(line, reply);
-        if let Err(e) = llm.prefill(&persona.context()) {
+        if let Err(e) = routes.prefill(&persona.context()) {
             eprintln!("llm_pal: {e}");
         }
     }

@@ -20,6 +20,8 @@ enum Audio {
     End,
 }
 
+/// Clones share one queue and playback, so one clone can speak while another stops it.
+#[derive(Clone)]
 pub struct PocketSpeaker {
     tx: Sender<(u64, String)>,
     generation: Arc<AtomicU64>,

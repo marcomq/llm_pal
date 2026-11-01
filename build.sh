@@ -1,6 +1,5 @@
 #!/bin/sh
 # Usage: ./build.sh setup | test | godot | android | install | push-models
-# pal-stt (whisper.cpp) is a shared library next to pal-godot, see rust/pal-stt/Cargo.toml.
 # android: debug APK in build/; install: also installs it; push-models: copies models/ to the phone (adb).
 set -eu
 cd "$(dirname "$0")"
@@ -9,39 +8,31 @@ NDK="${ANDROID_NDK_HOME:-/opt/homebrew/share/android-commandlinetools/ndk/29.0.1
 APK=build/llm_pal.apk
 PACKAGE=io.github.marcomq.llmpal
 
-# Godot extension plus libpal_stt for macOS, then start the app.
+# Godot extension for macOS, then start the app.
 run_godot() {
-    (cd rust && cargo build --release -p pal-stt -p pal-godot)
+    (cd rust && cargo build --release -p pal-godot)
     mkdir -p godot/bin/macos
-    for lib in libpal_godot.dylib libpal_stt.dylib; do
-        # A new file, not an overwrite: macOS kills a process that maps a signed library changed in place.
-        rm -f "godot/bin/macos/$lib"
-        cp "rust/target/release/$lib" godot/bin/macos/
-    done
+    # A new file, not an overwrite: macOS kills a process that maps a signed library changed in place.
+    rm -f godot/bin/macos/libpal_godot.dylib
+    cp rust/target/release/libpal_godot.dylib godot/bin/macos/
     (cd godot && "$GODOT" --headless --import)
     "$GODOT" --path godot
 }
 
-# Godot extension and libpal_stt for arm64 Android, then the APK. Godot's template already ships libc++_shared.so.
+# Godot extension for arm64 Android, then the APK. Godot's template already ships libc++_shared.so.
 build_android() {
     # llama-cpp-sys-2 reads ANDROID_NDK, cargo-ndk ANDROID_NDK_HOME.
     export ANDROID_NDK_HOME="$NDK" ANDROID_NDK="$NDK"
     # ggml's int8 dot-product kernels (all arm64 phones since ~2018); without them the LLM runs at ~1 token/s.
     export GGML_CPU_ARM_ARCH="${GGML_CPU_ARM_ARCH:-armv8.2-a+dotprod+fp16}"
-    llvm="$NDK/toolchains/llvm/prebuilt/darwin-x86_64"
-    # whisper-rs-sys 0.15 links ggml-blas whenever the build host is macOS; Android has none, an empty archive does.
-    stub="$PWD/rust/target/android-stub"
-    mkdir -p "$stub"
-    "$llvm/bin/llvm-ar" rcs "$stub/libggml-blas.a"
-    (cd rust && CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS="-L native=$stub" \
-        cargo ndk -t arm64-v8a --platform 26 build --release -p pal-stt -p pal-godot)
+    (cd rust && cargo ndk -t arm64-v8a --platform 26 build --release -p pal-godot)
     mkdir -p godot/bin/android build
     out=rust/target/aarch64-linux-android/release
-    cp "$out/libpal_godot.so" "$out/libpal_stt.so" godot/bin/android/
+    cp "$out/libpal_godot.so" godot/bin/android/
     (cd godot && "$GODOT" --headless --import && "$GODOT" --headless --export-debug Android)
 }
 
-# The models stay out of the APK (about 1.5 GB); the app reads them from its own folder.
+# The models stay out of the APK (about 2 GB); the app reads them from its own folder.
 # The app must create that folder (start it once): files in a folder made by adb stay unreadable for the app.
 push_models() {
     dir="/sdcard/Android/data/$PACKAGE/files/models"
@@ -49,13 +40,9 @@ push_models() {
         echo "start the app once first, it creates $dir" >&2
         exit 1
     fi
-    for f in silero_vad.onnx smart-turn-v3.2-cpu.onnx ggml-small-q5_1.bin Qwen3.5-2B-Q4_K_M.gguf; do
+    for f in silero_vad.onnx smart-turn-v3.2-cpu.onnx Qwen3.5-2B-Q4_K_M.gguf parakeet-tdt-0.6b-v3; do
         adb push "models/$f" "$dir/"
     done
-    # Optional, from `PARAKEET=1 sh scripts/fetch-models.sh`.
-    if [ -d models/parakeet-tdt-0.6b-v3 ]; then
-        adb push models/parakeet-tdt-0.6b-v3 "$dir/"
-    fi
     push_pocket "$dir/pocket"
 }
 
@@ -85,7 +72,7 @@ push_pocket() {
 
 case "${1:-}" in
     setup) sh scripts/fetch-models.sh && sh scripts/make-test-audio.sh ;;
-    test) (cd rust && cargo build -p pal-stt && cargo test --workspace -- --include-ignored --skip speaker) ;;
+    test) (cd rust && cargo test --workspace -- --include-ignored --skip speaker) ;;
     godot) run_godot ;;
     android) build_android ;;
     install) build_android && adb install -r "$APK" ;;

@@ -12,7 +12,8 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
-/// pal-tts change: a folder holding `hf://` files as `<owner>/<repo>/<file>`, used instead of downloading.
+/// pal-tts change: a folder holding `hf://` files as `<owner>/<repo>/<file>`, used instead of downloading; a
+/// file missing there is downloaded if the `download` feature is on.
 static LOCAL: OnceLock<PathBuf> = OnceLock::new();
 
 /// pal-tts change: see [`LOCAL`]; needed without the `download` feature, e.g. on Android.
@@ -27,10 +28,12 @@ pub fn download_if_necessary(file_path: &str) -> Result<PathBuf> {
         let (repo_id, filename, revision) = split_hf_path(rest)?;
         if let Some(dir) = LOCAL.get() {
             let path = dir.join(repo_id).join(&filename);
-            if !path.exists() {
+            if path.exists() {
+                return Ok(path);
+            }
+            if !cfg!(feature = "download") {
                 bail!("{} is missing", path.display());
             }
-            return Ok(path);
         }
         download_hf(repo_id, &filename, revision)
             .map_err(|e| e.context(format!("cannot download {file_path}")))

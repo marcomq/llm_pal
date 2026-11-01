@@ -55,7 +55,9 @@ impl Sentences {
                 return Some(end);
             }
             let next = b[end..].chars().next()?;
-            if c == ',' && next.is_whitespace() && !self.started {
+            // Only while the sentence is still streaming: split, the voice says each piece as a sentence of its own.
+            let streaming = !b[end..].contains(['.', '!', '?', '…']);
+            if c == ',' && next.is_whitespace() && !self.started && streaming {
                 return (b[..i].split_whitespace().count() >= FIRST_PIECE_WORDS).then_some(end);
             }
             let closes = matches!(c, '.' | '!' | '?' | '…') && next.is_whitespace();
@@ -103,6 +105,12 @@ mod tests {
     fn first_piece_may_end_at_a_comma() {
         let out = split(&["Oh, Michael, that is", " really great, honestly", ". One more, please."]);
         assert_eq!(out, ["Oh, Michael, that is really great,", "honestly.", "One more, please."]);
+    }
+
+    #[test]
+    fn whole_sentences_are_not_split_at_a_comma() {
+        let out = split(&["Off to bed with you, Michael. I keep the engine warm."]);
+        assert_eq!(out, ["Off to bed with you, Michael.", "I keep the engine warm."]);
     }
 
     #[test]

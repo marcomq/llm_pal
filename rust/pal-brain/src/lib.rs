@@ -8,6 +8,8 @@ pub mod numbers;
 pub mod persona;
 pub mod pocket_speaker;
 pub mod prosody_tags;
+pub mod remote;
+pub mod routes;
 pub mod sentences;
 pub mod stt;
 pub mod voice_filter;
@@ -20,6 +22,8 @@ pub enum Error {
     Llm(String),
     #[error("tts: {0}")]
     Tts(String),
+    #[error("routes: {0}")]
+    Routes(String),
     #[error("microphone: {0}")]
     Audio(#[from] pal_core::Error),
 }

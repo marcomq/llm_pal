@@ -6,7 +6,3 @@ reloadable = false
 [libraries]
 macos = "res://bin/macos/libpal_godot.dylib"
 android.arm64 = "res://bin/android/libpal_godot.so"
-
-[dependencies]
-macos = { "res://bin/macos/libpal_stt.dylib" : "" }
-android.arm64 = { "res://bin/android/libpal_stt.so" : "" }

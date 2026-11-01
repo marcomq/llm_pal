@@ -17,14 +17,16 @@ use llama_cpp_2::{LlamaStateSeqFlags, SeqState};
 
 use crate::{Error, Result};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Role {
     System,
     User,
     Assistant,
 }
 
-#[derive(Debug, Clone)]
+/// Serialises like an OpenAI chat message, so the same request can go to an external model.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Message {
     pub role: Role,
     pub content: String,
