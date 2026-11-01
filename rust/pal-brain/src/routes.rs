@@ -17,9 +17,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::language::Language;
 use crate::llm::{Llm, LlmSession, LocalLlm, Message};
-use crate::pocket_speaker::PocketSpeaker;
 use crate::remote::RemoteLlm;
 use crate::sentences::Sentences;
+use crate::tts::PocketSpeaker;
 use crate::{Error, Result};
 
 const KIND: &str = "kind";

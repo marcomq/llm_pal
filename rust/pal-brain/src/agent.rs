@@ -1,4 +1,6 @@
 //! The conversation loop on its own thread: microphone -> segment -> STT -> LLM -> sentences -> speech.
+//! In `converse`: segments from `pal_core::mic_pipeline`, text from `stt`, canned replies from `persona`,
+//! extra knowledge from `enrich`, the reply through `routes` to `tts`. See AGENTS.md for the whole flow.
 //! Readers such as a UI poll `state()` and `level()` lock-free and drain `poll()` for texts.
 
 use std::collections::VecDeque;
@@ -11,14 +13,15 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use pal_core::playback::PlaybackState;
 use pal_core::{Event, Processor, ProcessorConfig, Segment, SegmenterConfig};
 
+use crate::enrich;
 use crate::language::Language;
 use crate::llm::{LlmConfig, LocalLlm};
 use crate::persona::Persona;
-use crate::pocket_speaker::PocketSpeaker;
 use crate::prosody_tags::{self, ProsodyTags};
 use crate::remote::{RemoteConfig, RemoteLlm};
 use crate::routes::{Brain, ReplyRoutes, Spoken};
 use crate::stt::Recognizer;
+use crate::tts::PocketSpeaker;
 use crate::{Error, Result};
 
 pub struct AgentConfig {
@@ -146,11 +149,6 @@ impl Agent {
 
     pub fn poll(&self) -> Option<AgentEvent> {
         self.events.try_recv().ok()
-    }
-
-    /// Blocks for the next event; None once the agent thread is gone.
-    pub fn next(&self) -> Option<AgentEvent> {
-        self.events.recv().ok()
     }
 }
 
@@ -397,7 +395,7 @@ fn converse(cfg: &AgentConfig, shared: &Shared, tx: &Sender<AgentEvent>) -> Resu
         let canned = persona.joke(&text).or_else(|| persona.quip(&text)).or_else(|| persona.pooled(&text));
         let started = match canned {
             Some(canned) => routes.canned(&turn, &canned, early),
-            None => routes.reply(&turn, &persona.messages(&line), early),
+            None => routes.reply(&turn, &persona.messages(&enrich::prompt_line(&text, &line, cfg.language)), early),
         };
         if let Err(e) = started {
             eprintln!("llm_pal: {e}");

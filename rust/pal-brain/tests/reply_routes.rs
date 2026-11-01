@@ -8,8 +8,8 @@ use std::time::{Duration, Instant};
 use pal_brain::language::Language;
 use pal_brain::llm::{LlmConfig, LocalLlm};
 use pal_brain::persona::{DEFAULT_NAME, Persona};
-use pal_brain::pocket_speaker::PocketSpeaker;
 use pal_brain::routes::{ReplyRoutes, Spoken};
+use pal_brain::tts::PocketSpeaker;
 
 const LANG: Language = Language::German;
 const LONG: Duration = Duration::from_secs(60);

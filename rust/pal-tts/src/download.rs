@@ -2,9 +2,9 @@
 //! Hugging Face cache, shared with the Python package, and `http(s)://` URLs through
 //! `~/.cache/pocket_tts`.
 
-use anyhow::{Result, bail};
 #[cfg(feature = "download")]
 use anyhow::Context;
+use anyhow::{Result, bail};
 #[cfg(feature = "download")]
 use sha2::{Digest, Sha256};
 #[cfg(feature = "download")]
@@ -35,8 +35,7 @@ pub fn download_if_necessary(file_path: &str) -> Result<PathBuf> {
                 bail!("{} is missing", path.display());
             }
         }
-        download_hf(repo_id, &filename, revision)
-            .map_err(|e| e.context(format!("cannot download {file_path}")))
+        download_hf(repo_id, &filename, revision).map_err(|e| e.context(format!("cannot download {file_path}")))
     } else {
         Ok(PathBuf::from(file_path))
     }
@@ -93,10 +92,7 @@ pub fn cache_directory() -> Result<PathBuf> {
 fn download_url(url: &str) -> Result<PathBuf> {
     let url_path = url.split(['?', '#']).next().unwrap_or(url);
     let url_path = url_path.splitn(4, '/').nth(3).unwrap_or("");
-    let suffix = Path::new(url_path)
-        .extension()
-        .map(|ext| format!(".{}", ext.to_string_lossy()))
-        .unwrap_or_default();
+    let suffix = Path::new(url_path).extension().map(|ext| format!(".{}", ext.to_string_lossy())).unwrap_or_default();
     let digest = Sha256::digest(url.as_bytes());
     let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
     let cached_file = cache_directory()?.join(format!("{hex}{suffix}"));
@@ -104,9 +100,7 @@ fn download_url(url: &str) -> Result<PathBuf> {
         let response = reqwest::blocking::get(url)
             .and_then(|r| r.error_for_status())
             .with_context(|| format!("cannot download {url}"))?;
-        let bytes = response
-            .bytes()
-            .with_context(|| format!("cannot download {url}"))?;
+        let bytes = response.bytes().with_context(|| format!("cannot download {url}"))?;
         let partial = cached_file.with_extension("partial");
         std::fs::write(&partial, &bytes)?;
         std::fs::rename(&partial, &cached_file)?;
@@ -122,16 +116,9 @@ mod tests {
     fn hf_paths_split_like_python() {
         assert_eq!(
             split_hf_path("kyutai/pocket-tts/languages/english/model.safetensors@abc").unwrap(),
-            (
-                "kyutai/pocket-tts",
-                "languages/english/model.safetensors".to_string(),
-                Some("abc")
-            )
+            ("kyutai/pocket-tts", "languages/english/model.safetensors".to_string(), Some("abc"))
         );
-        assert_eq!(
-            split_hf_path("user/repo/config.yaml").unwrap(),
-            ("user/repo", "config.yaml".to_string(), None)
-        );
+        assert_eq!(split_hf_path("user/repo/config.yaml").unwrap(), ("user/repo", "config.yaml".to_string(), None));
         assert!(split_hf_path("user/repo").is_err());
     }
 }

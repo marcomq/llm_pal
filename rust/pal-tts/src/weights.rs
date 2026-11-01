@@ -26,15 +26,14 @@ pub struct SafetensorsFile {
 
 impl SafetensorsFile {
     pub fn open(path: &Path) -> Result<Self> {
-        let mut file =
-            std::fs::File::open(path).with_context(|| format!("cannot open {}", path.display()))?;
+        let mut file = std::fs::File::open(path).with_context(|| format!("cannot open {}", path.display()))?;
         let mut len = [0u8; 8];
         file.read_exact(&mut len)?;
         let len = u64::from_le_bytes(len);
         let mut header = vec![0u8; len as usize];
         file.read_exact(&mut header)?;
-        let header: HashMap<String, serde_json::Value> = serde_json::from_slice(&header)
-            .with_context(|| format!("{} is not a safetensors file", path.display()))?;
+        let header: HashMap<String, serde_json::Value> =
+            serde_json::from_slice(&header).with_context(|| format!("{} is not a safetensors file", path.display()))?;
         let mut tensors = HashMap::new();
         for (name, value) in header {
             if name == "__metadata__" {
@@ -49,21 +48,12 @@ impl SafetensorsFile {
                     .map(|d| d.as_u64().map(|d| d as usize))
                     .collect::<Option<Vec<_>>>()?;
                 let offsets = value.get("data_offsets")?.as_array()?;
-                Some(TensorInfo {
-                    dtype,
-                    shape,
-                    start: offsets.first()?.as_u64()?,
-                    end: offsets.get(1)?.as_u64()?,
-                })
+                Some(TensorInfo { dtype, shape, start: offsets.first()?.as_u64()?, end: offsets.get(1)?.as_u64()? })
             })()
             .with_context(|| format!("bad entry {name} in {}", path.display()))?;
             tensors.insert(name, info);
         }
-        Ok(Self {
-            path: path.to_path_buf(),
-            data_start: 8 + len,
-            tensors,
-        })
+        Ok(Self { path: path.to_path_buf(), data_start: 8 + len, tensors })
     }
 
     fn read_bytes(&self, info: &TensorInfo) -> Result<Vec<u8>> {
@@ -76,34 +66,18 @@ impl SafetensorsFile {
 
     /// A floating point tensor, converted to f32.
     pub fn read_f32(&self, name: &str) -> Result<(Vec<f32>, Vec<usize>)> {
-        let info = self
-            .tensors
-            .get(name)
-            .with_context(|| format!("no tensor {name}"))?;
+        let info = self.tensors.get(name).with_context(|| format!("no tensor {name}"))?;
         let bytes = self.read_bytes(info)?;
         Ok((bytes_to_f32(&info.dtype, &bytes)?, info.shape.clone()))
     }
 
     /// An integer tensor, converted to i64.
     pub fn read_i64(&self, name: &str) -> Result<Vec<i64>> {
-        let info = self
-            .tensors
-            .get(name)
-            .with_context(|| format!("no tensor {name}"))?;
+        let info = self.tensors.get(name).with_context(|| format!("no tensor {name}"))?;
         let bytes = self.read_bytes(info)?;
         Ok(match info.dtype.as_str() {
-            "I64" => bytes
-                .as_chunks::<8>()
-                .0
-                .iter()
-                .map(|b| i64::from_le_bytes(*b))
-                .collect(),
-            "I32" => bytes
-                .as_chunks::<4>()
-                .0
-                .iter()
-                .map(|b| i32::from_le_bytes(*b) as i64)
-                .collect(),
+            "I64" => bytes.as_chunks::<8>().0.iter().map(|b| i64::from_le_bytes(*b)).collect(),
+            "I32" => bytes.as_chunks::<4>().0.iter().map(|b| i32::from_le_bytes(*b) as i64).collect(),
             other => bail!("tensor {name} has dtype {other}, expected an integer"),
         })
     }
@@ -111,24 +85,14 @@ impl SafetensorsFile {
 
 pub fn bytes_to_f32(dtype: &str, bytes: &[u8]) -> Result<Vec<f32>> {
     Ok(match dtype {
-        "F32" => bytes
-            .as_chunks::<4>()
-            .0
-            .iter()
-            .map(|b| f32::from_le_bytes(*b))
-            .collect(),
+        "F32" => bytes.as_chunks::<4>().0.iter().map(|b| f32::from_le_bytes(*b)).collect(),
         "BF16" => bytes
             .as_chunks::<2>()
             .0
             .iter()
             .map(|b| f32::from_bits((u16::from_le_bytes([b[0], b[1]]) as u32) << 16))
             .collect(),
-        "F16" => bytes
-            .as_chunks::<2>()
-            .0
-            .iter()
-            .map(|b| half::f16::from_le_bytes([b[0], b[1]]).to_f32())
-            .collect(),
+        "F16" => bytes.as_chunks::<2>().0.iter().map(|b| half::f16::from_le_bytes([b[0], b[1]]).to_f32()).collect(),
         other => bail!("unsupported dtype {other}, expected a float"),
     })
 }
@@ -155,9 +119,7 @@ fn flow_lm_file_key(key: &str) -> Option<String> {
         return None;
     }
     let key = match key {
-        "condition_provider.conditioners.transcript_in_segment.embed.weight" => {
-            "conditioner.embed.weight"
-        }
+        "condition_provider.conditioners.transcript_in_segment.embed.weight" => "conditioner.embed.weight",
         "condition_provider.conditioners.speaker_wavs.output_proj.weight" => "speaker_proj_weight",
         "fuser.padding_value" => "bos_before_voice",
         key => key,
@@ -192,11 +154,7 @@ pub fn load(files: &WeightFiles) -> Result<Weights> {
         None => None,
         Some(path) => {
             let file = SafetensorsFile::open(path)?;
-            let keys: HashSet<String> = file
-                .tensors
-                .into_keys()
-                .filter(|key| key.starts_with("mimi."))
-                .collect();
+            let keys: HashSet<String> = file.tensors.into_keys().filter(|key| key.starts_with("mimi.")).collect();
             // TODO: the Mimi checkpoints of training runs (weight-normed, `model.` keys), which
             // `get_mimi_state_dict` converts, are not supported.
             if keys.is_empty() {
@@ -212,11 +170,7 @@ pub fn load(files: &WeightFiles) -> Result<Weights> {
         (Some(bundle), _) => (bundle, false),
         (None, Some(flow_lm)) => {
             let file = SafetensorsFile::open(flow_lm)?;
-            if let Some(key) = file
-                .tensors
-                .keys()
-                .find(|key| key.starts_with("flow_lm.") || key.starts_with("mimi."))
-            {
+            if let Some(key) = file.tensors.keys().find(|key| key.starts_with("flow_lm.") || key.starts_with("mimi.")) {
                 bail!(
                     "{} is not a flow LM checkpoint: it has a tensor {key}, use it as the config's weights_path",
                     flow_lm.display()

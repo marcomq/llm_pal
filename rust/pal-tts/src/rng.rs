@@ -10,10 +10,7 @@ use rand_distr::{Distribution, Normal};
 const SEED: u64 = 42;
 
 fn seed() -> u64 {
-    std::env::var("POCKET_TTS_SEED")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(SEED)
+    std::env::var("POCKET_TTS_SEED").ok().and_then(|s| s.parse().ok()).unwrap_or(SEED)
 }
 
 pub struct NoiseRng {
@@ -25,11 +22,7 @@ pub struct NoiseRng {
 impl NoiseRng {
     pub fn new(temperature: f32, noise_clamp: Option<f32>) -> anyhow::Result<Self> {
         let normal = Normal::new(0.0, temperature.max(0.0).sqrt())?;
-        Ok(Self {
-            rng: rand::rngs::StdRng::seed_from_u64(seed()),
-            normal,
-            clamp: noise_clamp,
-        })
+        Ok(Self { rng: rand::rngs::StdRng::seed_from_u64(seed()), normal, clamp: noise_clamp })
     }
 
     fn draw(&mut self) -> f32 {

@@ -51,8 +51,7 @@ impl FlowLMTransformerConfig {
     }
 
     pub fn dim_feedforward(&self) -> usize {
-        self.dim_feedforward
-            .unwrap_or(self.d_model * self.hidden_scale)
+        self.dim_feedforward.unwrap_or(self.d_model * self.hidden_scale)
     }
 }
 
@@ -160,9 +159,7 @@ impl MimiConfig {
     }
 
     pub fn decoder_transformer(&self) -> &MimiTransformerConfig {
-        self.decoder_transformer
-            .as_ref()
-            .unwrap_or(&self.transformer)
+        self.decoder_transformer.as_ref().unwrap_or(&self.transformer)
     }
 
     /// Whether the decoder has its own dims, which xn-ptts then loads with a config of its own.
@@ -263,24 +260,17 @@ impl Config {
             }
             Some(path) => {
                 // hf:// paths may carry a "@revision" suffix, strip it before checking the extension.
-                let suffix_source = if path.starts_with("hf://") {
-                    path.split('@').next().unwrap()
-                } else {
-                    path
-                };
+                let suffix_source = if path.starts_with("hf://") { path.split('@').next().unwrap() } else { path };
                 if !(suffix_source.ends_with(".yaml") || suffix_source.ends_with(".yml")) {
                     bail!("Config should be a path to a YAML file ending with .yaml")
                 }
                 let local = crate::download::download_if_necessary(path)?;
                 if !local.exists() {
-                    bail!(
-                        "Config file not found: {}. Did you make a typo?",
-                        local.display()
-                    )
+                    bail!("Config file not found: {}. Did you make a typo?", local.display())
                 }
                 log::info!("Loading model from config at {path}...");
-                let yaml = std::fs::read_to_string(&local)
-                    .with_context(|| format!("cannot read {}", local.display()))?;
+                let yaml =
+                    std::fs::read_to_string(&local).with_context(|| format!("cannot read {}", local.display()))?;
                 (yaml, Origin::Custom(path.to_string()))
             }
         };
@@ -300,22 +290,13 @@ impl Config {
         // TODO: upstream to xn-ptts. Its Mimi decoder upsamples from as many channels as it
         // decodes; an `outer_dim` (the `in_dimension` of `ConvTrUpsample1d`) other than that
         // needs support in `MimiConfig`.
-        if mimi
-            .outer_dim
-            .is_some_and(|outer_dim| outer_dim != decoder_dimension)
-        {
+        if mimi.outer_dim.is_some_and(|outer_dim| outer_dim != decoder_dimension) {
             bail!("mimi.outer_dim different from the decoder's seanet dimension is not supported")
         }
-        for (name, seanet) in [
-            ("seanet", &mimi.seanet),
-            ("decoder_seanet", mimi.decoder_seanet()),
-        ] {
+        for (name, seanet) in [("seanet", &mimi.seanet), ("decoder_seanet", mimi.decoder_seanet())] {
             // TODO: upstream to xn-ptts. Its SEANet always pads with zeros.
             if seanet.pad_mode != "constant" {
-                bail!(
-                    "mimi.{name}.pad_mode {:?} is not supported",
-                    seanet.pad_mode
-                )
+                bail!("mimi.{name}.pad_mode {:?} is not supported", seanet.pad_mode)
             }
             if seanet.channels != 1 {
                 bail!("only mono Mimi models are supported")
@@ -326,15 +307,9 @@ impl Config {
         }
         for (name, transformer, dimension) in [
             ("transformer", &mimi.transformer, mimi.seanet.dimension),
-            (
-                "decoder_transformer",
-                mimi.decoder_transformer(),
-                decoder_dimension,
-            ),
+            ("decoder_transformer", mimi.decoder_transformer(), decoder_dimension),
         ] {
-            if transformer.input_dimension != dimension
-                || transformer.output_dimensions != [dimension]
-            {
+            if transformer.input_dimension != dimension || transformer.output_dimensions != [dimension] {
                 bail!("mimi.{name} must map its seanet dimension to itself")
             }
         }
@@ -350,11 +325,7 @@ impl Config {
     }
 
     /// The `MimiConfig` of xn-ptts for a SEANet and a transformer of `self.mimi`.
-    fn mimi_to_ptts(
-        &self,
-        seanet: &SEANetConfig,
-        transformer: &MimiTransformerConfig,
-    ) -> serde_json::Value {
+    fn mimi_to_ptts(&self, seanet: &SEANetConfig, transformer: &MimiTransformerConfig) -> serde_json::Value {
         let mimi = &self.mimi;
         serde_json::json!({
             "channels": mimi.channels,
@@ -387,11 +358,7 @@ impl Config {
     }
 
     /// The `config.json` of xn-ptts that describes the same model.
-    pub fn to_ptts(
-        &self,
-        sampler_decode_steps: usize,
-        eos_threshold: f32,
-    ) -> Result<ptts::tts_model::TTSConfig> {
+    pub fn to_ptts(&self, sampler_decode_steps: usize, eos_threshold: f32) -> Result<ptts::tts_model::TTSConfig> {
         let flow_lm = &self.flow_lm;
         let mimi = &self.mimi;
         let mut config = serde_json::json!({
@@ -445,9 +412,7 @@ mod tests {
     fn every_embedded_config_parses_and_translates() {
         for (name, yaml) in CONFIGS {
             let config = Config::parse(yaml).unwrap_or_else(|e| panic!("{name}: {e:#}"));
-            config
-                .to_ptts(1, -4.0)
-                .unwrap_or_else(|e| panic!("{name}: {e:#}"));
+            config.to_ptts(1, -4.0).unwrap_or_else(|e| panic!("{name}: {e:#}"));
         }
         assert!(available_languages().contains(&"english"));
     }
@@ -460,10 +425,7 @@ mod tests {
     #[test]
     fn the_eos_threshold_defaults_to_the_python_one() {
         let config = english_with("").unwrap();
-        assert_eq!(
-            config.default_eos_threshold,
-            crate::defaults::DEFAULT_EOS_THRESHOLD
-        );
+        assert_eq!(config.default_eos_threshold, crate::defaults::DEFAULT_EOS_THRESHOLD);
         let config = english_with("default_eos_threshold: -1.0").unwrap();
         assert_eq!(config.default_eos_threshold, -1.0);
     }
@@ -497,19 +459,13 @@ mod tests {
         let ptts = config.to_ptts(1, -1.0).unwrap();
         let f = &ptts.flow_lm;
         assert_eq!(f.flow_type, FlowType::Pointwise);
-        assert_eq!(
-            (f.z_dim, f.attn_dim, f.num_kv_heads),
-            (Some(64), Some(192), Some(1))
-        );
+        assert_eq!((f.z_dim, f.attn_dim, f.num_kv_heads), (Some(64), Some(192), Some(1)));
         assert_eq!((f.dim_feedforward, f.lut_rank), (96, Some(32)));
         // The decoder's dims go to `mimi`, the encoder's to `speaker_mimi`.
         assert_eq!(ptts.mimi.dimension, 128);
         assert_eq!(ptts.mimi.transformer_context, 49);
         let speaker_mimi = ptts.speaker_mimi.as_ref().unwrap();
-        assert_eq!(
-            (speaker_mimi.prefix.as_str(), speaker_mimi.mimi.dimension),
-            ("mimi", 512)
-        );
+        assert_eq!((speaker_mimi.prefix.as_str(), speaker_mimi.mimi.dimension), ("mimi", 512));
     }
 
     #[test]

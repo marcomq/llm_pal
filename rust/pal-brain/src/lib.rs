@@ -1,17 +1,18 @@
 //! Speech understanding and replies on top of pal-core segments: STT, LLM, prosody tags, sentence streaming, TTS.
 
 pub mod agent;
+pub mod enrich;
 pub mod language;
 pub mod leveler;
 pub mod llm;
 pub mod numbers;
 pub mod persona;
-pub mod pocket_speaker;
 pub mod prosody_tags;
 pub mod remote;
 pub mod routes;
 pub mod sentences;
 pub mod stt;
+pub mod tts;
 pub mod voice_filter;
 
 #[derive(Debug, thiserror::Error)]

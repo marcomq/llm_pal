@@ -18,8 +18,7 @@ pub fn audio_read(path: &Path) -> Result<(Vec<f32>, u32)> {
     use symphonia::core::meta::MetadataOptions;
     use symphonia::core::probe::Hint;
 
-    let file =
-        std::fs::File::open(path).with_context(|| format!("cannot open {}", path.display()))?;
+    let file = std::fs::File::open(path).with_context(|| format!("cannot open {}", path.display()))?;
     let stream = MediaSourceStream::new(Box::new(file), Default::default());
     let mut hint = Hint::new();
     if let Some(ext) = path.extension().and_then(|ext| ext.to_str()) {
@@ -27,17 +26,12 @@ pub fn audio_read(path: &Path) -> Result<(Vec<f32>, u32)> {
     }
     // Gapless: the encoder delay and padding of MP3 and AAC are trimmed, as libsndfile (the
     // Python package's decoder) does, rather than heard as a shift.
-    let format_options = FormatOptions {
-        enable_gapless: true,
-        ..Default::default()
-    };
+    let format_options = FormatOptions { enable_gapless: true, ..Default::default() };
     let probed = symphonia::default::get_probe()
         .format(&hint, stream, &format_options, &MetadataOptions::default())
         .with_context(|| format!("unsupported audio format: {}", path.display()))?;
     let mut format = probed.format;
-    let track = format
-        .default_track()
-        .with_context(|| format!("no audio track in {}", path.display()))?;
+    let track = format.default_track().with_context(|| format!("no audio track in {}", path.display()))?;
     let track_id = track.id;
     let mut sample_rate = track.codec_params.sample_rate;
     let mut decoder = symphonia::default::get_codecs()
@@ -72,8 +66,7 @@ pub fn audio_read(path: &Path) -> Result<(Vec<f32>, u32)> {
             samples.push(frame.iter().sum::<f32>() / channels as f32);
         }
     }
-    let sample_rate =
-        sample_rate.with_context(|| format!("no sample rate in {}", path.display()))?;
+    let sample_rate = sample_rate.with_context(|| format!("no sample rate in {}", path.display()))?;
     Ok((samples, sample_rate))
 }
 
@@ -103,26 +96,16 @@ pub fn end_on_pause(wav: &[f32], sample_rate: usize) -> Vec<f32> {
     let mut out = wav[..end].to_vec();
     let fade = ((fade_sec * sample_rate as f64) as usize).min(end);
     for i in 0..fade {
-        let gain = if fade == 1 {
-            1.0
-        } else {
-            1.0 - i as f32 / (fade - 1) as f32
-        };
+        let gain = if fade == 1 { 1.0 } else { 1.0 - i as f32 / (fade - 1) as f32 };
         out[end - fade + i] *= gain;
     }
-    out.extend(std::iter::repeat_n(
-        0.0,
-        (pause_sec * sample_rate as f64) as usize,
-    ));
+    out.extend(std::iter::repeat_n(0.0, (pause_sec * sample_rate as f64) as usize));
     out
 }
 
 /// Seconds of audio buffered before the first write, from `FIRST_CHUNK_LENGTH_SECONDS`.
 fn first_chunk_length_seconds() -> f64 {
-    std::env::var("FIRST_CHUNK_LENGTH_SECONDS")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(0.0)
+    std::env::var("FIRST_CHUNK_LENGTH_SECONDS").ok().and_then(|v| v.parse().ok()).unwrap_or(0.0)
 }
 
 /// An output a WAV is streamed to: a file, whose header is fixed up at the end, or a pipe.
@@ -172,13 +155,7 @@ const UNSEEKABLE_NFRAMES: u64 = 1_000_000_000;
 
 impl<S: WavSink> StreamingWavWriter<S> {
     pub fn new(sink: S, sample_rate: u32, seekable: bool) -> Self {
-        Self {
-            sink,
-            sample_rate,
-            seekable,
-            data_bytes: 0,
-            first_chunk_buffer: Some(Vec::new()),
-        }
+        Self { sink, sample_rate, seekable, data_bytes: 0, first_chunk_buffer: Some(Vec::new()) }
     }
 
     fn write_header(&mut self, data_bytes: u64) -> std::io::Result<()> {
@@ -200,11 +177,7 @@ impl<S: WavSink> StreamingWavWriter<S> {
     }
 
     pub fn write_header_initial(&mut self) -> std::io::Result<()> {
-        let initial = if self.seekable {
-            0
-        } else {
-            UNSEEKABLE_NFRAMES * 2
-        };
+        let initial = if self.seekable { 0 } else { UNSEEKABLE_NFRAMES * 2 };
         self.write_header(initial)
     }
 
@@ -215,10 +188,8 @@ impl<S: WavSink> StreamingWavWriter<S> {
     }
 
     pub fn write_pcm(&mut self, audio: &[f32]) -> std::io::Result<()> {
-        let bytes: Vec<u8> = audio
-            .iter()
-            .flat_map(|&v| ((v.clamp(-1.0, 1.0) * 32767.0) as i16).to_le_bytes())
-            .collect();
+        let bytes: Vec<u8> =
+            audio.iter().flat_map(|&v| ((v.clamp(-1.0, 1.0) * 32767.0) as i16).to_le_bytes()).collect();
         if let Some(buffer) = self.first_chunk_buffer.as_mut() {
             buffer.extend_from_slice(&bytes);
             let target = (self.sample_rate as f64 * first_chunk_length_seconds()) as usize * 2;

@@ -77,9 +77,7 @@ impl<Q: CpuBackend> VoiceState<Q> {
     pub fn export(&self, path: &Path) -> Result<()> {
         let mut tensors: Vec<(String, safetensors::Dtype, Vec<usize>, Vec<u8>)> = Vec::new();
         for (i, layer) in self.transformer_state.layer_states.iter().enumerate() {
-            let LayerAttentionState::FlowLm(state) = layer else {
-                bail!("layer {i} has no flow LM attention state")
-            };
+            let LayerAttentionState::FlowLm(state) = layer else { bail!("layer {i} has no flow LM attention state") };
             let (b, _, h, d) = state.k_cache.dims4()?;
             let t = state.current_end;
             let mut bytes = Vec::with_capacity(2 * b * t * h * d * 4);
@@ -88,27 +86,14 @@ impl<Q: CpuBackend> VoiceState<Q> {
                 bytes.extend(values.iter().flat_map(|v| v.to_f32().to_le_bytes()));
             }
             let module = format!("transformer.layers.{i}.self_attn");
-            tensors.push((
-                format!("{module}/cache"),
-                safetensors::Dtype::F32,
-                vec![2, b, t, h, d],
-                bytes,
-            ));
+            tensors.push((format!("{module}/cache"), safetensors::Dtype::F32, vec![2, b, t, h, d], bytes));
             let offset: Vec<u8> = (0..b).flat_map(|_| (t as i64).to_le_bytes()).collect();
-            tensors.push((
-                format!("{module}/offset"),
-                safetensors::Dtype::I64,
-                vec![b],
-                offset,
-            ));
+            tensors.push((format!("{module}/offset"), safetensors::Dtype::I64, vec![b], offset));
         }
         let views = tensors
             .iter()
             .map(|(name, dtype, shape, bytes)| {
-                Ok((
-                    name.clone(),
-                    safetensors::tensor::TensorView::new(*dtype, shape.clone(), bytes)?,
-                ))
+                Ok((name.clone(), safetensors::tensor::TensorView::new(*dtype, shape.clone(), bytes)?))
             })
             .collect::<Result<Vec<_>, safetensors::SafeTensorError>>()?;
         safetensors::tensor::serialize_to_file(views, None, path)
@@ -138,9 +123,7 @@ impl<Q: CpuBackend> TtsModel<Q> {
         let mut has_voice_cloning = true;
         if let Some(mimi_path) = config.mimi.weights_path.as_deref() {
             if config.flow_lm.weights_path.is_none() && config.weights_path.is_none() {
-                bail!(
-                    "If you specify mimi.weights_path you should specify flow_lm.weights_path or weights_path"
-                )
+                bail!("If you specify mimi.weights_path you should specify flow_lm.weights_path or weights_path")
             }
             log::info!("Loading Mimi weights from {mimi_path}");
             weight_files.mimi = Some(crate::download::download_if_necessary(mimi_path)?);
@@ -150,8 +133,7 @@ impl<Q: CpuBackend> TtsModel<Q> {
             let path = match crate::download::download_if_necessary(weights_path) {
                 Ok(path) => path,
                 Err(e) => {
-                    let Some(fallback) = config.weights_path_without_voice_cloning.as_deref()
-                    else {
+                    let Some(fallback) = config.weights_path_without_voice_cloning.as_deref() else {
                         return Err(e);
                     };
                     log::debug!("falling back to the weights without voice cloning: {e:#}");
@@ -171,11 +153,8 @@ impl<Q: CpuBackend> TtsModel<Q> {
         }
 
         let lookup_table = &config.flow_lm.lookup_table;
-        let tokenizer = Arc::new(Tokenizer::load(
-            lookup_table.n_bins,
-            &lookup_table.tokenizer_path,
-            &lookup_table.tokenizer,
-        )?);
+        let tokenizer =
+            Arc::new(Tokenizer::load(lookup_table.n_bins, &lookup_table.tokenizer_path, &lookup_table.tokenizer)?);
 
         // The drifting and pointwise heads map the noise in one step, whatever the number of
         // steps asked.
@@ -186,9 +165,7 @@ impl<Q: CpuBackend> TtsModel<Q> {
         if decode_steps == 0 {
             bail!("the number of sampler decode steps must be positive")
         }
-        let eos_threshold = options
-            .eos_threshold
-            .unwrap_or(config.default_eos_threshold);
+        let eos_threshold = options.eos_threshold.unwrap_or(config.default_eos_threshold);
         let ptts_config = config.to_ptts(decode_steps, eos_threshold)?;
         let weights = crate::weights::load(&weight_files)?;
         let model = TTSModel::<Q>::load(
@@ -199,11 +176,7 @@ impl<Q: CpuBackend> TtsModel<Q> {
         )?;
         let has_encoder = weights.vb.contains("mimi.encoder.model.0.conv.weight")
             && weights.vb.contains(ptts::loader::SPEAKER_PROJ_WEIGHT);
-        let encoder = if has_encoder {
-            Some(MimiEnc::<Q>::load(&weights.vb, &ptts_config)?)
-        } else {
-            None
-        };
+        let encoder = if has_encoder { Some(MimiEnc::<Q>::load(&weights.vb, &ptts_config)?) } else { None };
         drop(weights);
 
         let temperature = options.temperature.unwrap_or(config.default_temperature);
@@ -230,11 +203,7 @@ impl<Q: CpuBackend> TtsModel<Q> {
     /// Port of `get_state_for_audio_prompt`: `source` is a predefined voice name, an audio file
     /// or a `.safetensors` state, as a local path, an `http(s)://` URL or an `hf://` path.
     /// `truncate` keeps the first 30 seconds of an audio file.
-    pub fn get_state_for_audio_prompt(
-        &self,
-        source: &str,
-        truncate: bool,
-    ) -> Result<VoiceState<Q>> {
+    pub fn get_state_for_audio_prompt(&self, source: &str, truncate: bool) -> Result<VoiceState<Q>> {
         if is_safetensors_source(source) {
             let path = crate::download::download_if_necessary(source)?;
             return self.import_state(&path);
@@ -270,35 +239,22 @@ impl<Q: CpuBackend> TtsModel<Q> {
 
     /// Encodes mono audio at the model's sample rate and prompts the flow LM with it.
     fn state_for_audio(&self, audio: &[f32]) -> Result<VoiceState<Q>> {
-        let encoder = self
-            .encoder
-            .as_ref()
-            .with_context(voice_cloning_unsupported)?;
+        let encoder = self.encoder.as_ref().with_context(voice_cloning_unsupported)?;
         let start = Instant::now();
         let data = audio.iter().map(|&v| Q::T::from_f32(v)).collect();
         let audio = Tensor::from_vec(data, (1, 1, audio.len()), self.model.device())?;
         let conditioning = encoder.encode_audio(&audio)?;
-        log::info!(
-            "Encoding audio prompt took {} ms",
-            start.elapsed().as_millis()
-        );
+        log::info!("Encoding audio prompt took {} ms", start.elapsed().as_millis());
 
         let start = Instant::now();
         let frames = conditioning.dim(1usize)?;
-        let mut state = self
-            .model
-            .init_flow_lm_state(1, self.model.voice_prompt_len(frames))?;
+        let mut state = self.model.init_flow_lm_state(1, self.model.voice_prompt_len(frames))?;
         self.model.prompt_audio(&mut state, &conditioning)?;
         log::info!("Prompting audio took {} ms", start.elapsed().as_millis());
-        let voice = VoiceState {
-            transformer_state: state.flow_lm_state.transformer_state,
-        };
+        let voice = VoiceState { transformer_state: state.flow_lm_state.transformer_state };
         let kv_dim = self.num_kv_heads * self.head_dim;
         let size = 2 * self.num_layers * voice.len() * kv_dim * std::mem::size_of::<f32>();
-        log::info!(
-            "Size of the model state for audio prompt: {} MB",
-            size / 1_000_000
-        );
+        log::info!("Size of the model state for audio prompt: {} MB", size / 1_000_000);
         Ok(voice)
     }
 
@@ -311,10 +267,7 @@ impl<Q: CpuBackend> TtsModel<Q> {
             let module = format!("transformer.layers.{i}.self_attn");
             let cache_name = format!("{module}/cache");
             if !file.tensors.contains_key(&cache_name) {
-                bail!(
-                    "{} is not a voice state of this model: it has no {cache_name}",
-                    path.display()
-                )
+                bail!("{} is not a voice state of this model: it has no {cache_name}", path.display())
             }
             let (cache, shape) = file.read_f32(&cache_name)?;
             let [2, b, capacity, h, d] = shape[..] else {
@@ -343,15 +296,8 @@ impl<Q: CpuBackend> TtsModel<Q> {
             let per_position = h * d;
             let plane = capacity * per_position;
             let take = |start: usize| -> Result<Tensor<Q::T, Q::B>> {
-                let data = cache[start..start + used * per_position]
-                    .iter()
-                    .map(|&v| Q::T::from_f32(v))
-                    .collect();
-                Ok(Tensor::from_vec(
-                    data,
-                    (1, used, h, d),
-                    self.model.device(),
-                )?)
+                let data = cache[start..start + used * per_position].iter().map(|&v| Q::T::from_f32(v)).collect();
+                Ok(Tensor::from_vec(data, (1, used, h, d), self.model.device())?)
             };
             layer_states.push(LayerAttentionState::FlowLm(StreamingMHAState {
                 k_cache: take(0)?,
@@ -359,9 +305,7 @@ impl<Q: CpuBackend> TtsModel<Q> {
                 current_end: used,
             }));
         }
-        Ok(VoiceState {
-            transformer_state: StreamingTransformerState { layer_states },
-        })
+        Ok(VoiceState { transformer_state: StreamingTransformerState { layer_states } })
     }
 
     fn estimate_max_gen_len(&self, token_count: usize) -> usize {
@@ -383,12 +327,8 @@ impl<Q: CpuBackend> TtsModel<Q> {
     ) -> Result<()> {
         let frames_after_eos = frames_after_eos.or(self.config.model_recommended_frames_after_eos);
         // This is a very simplistic way of handling long texts, as in the Python package.
-        let chunks = split_into_best_sentences(
-            self.tokenizer.as_ref(),
-            text_to_generate,
-            max_tokens,
-            &self.text_options,
-        )?;
+        let chunks =
+            split_into_best_sentences(self.tokenizer.as_ref(), text_to_generate, max_tokens, &self.text_options)?;
         for chunk in chunks {
             if stop.load(Ordering::Relaxed) {
                 break;
@@ -412,12 +352,7 @@ impl<Q: CpuBackend> TtsModel<Q> {
         let max_gen_len = self.estimate_max_gen_len(tokens.len());
         let seq_budget = voice.len() + tokens.len() + max_gen_len;
         let transformer_state = voice.transformer_state.with_seq_budget(seq_budget)?;
-        let mut state = TTSState {
-            flow_lm_state: FlowLMState {
-                transformer_state,
-                conditions: None,
-            },
-        };
+        let mut state = TTSState { flow_lm_state: FlowLMState { transformer_state, conditions: None } };
 
         let t_generating = Instant::now();
         let start = Instant::now();
@@ -428,18 +363,10 @@ impl<Q: CpuBackend> TtsModel<Q> {
         let (latent_tx, latent_rx) = std::sync::mpsc::channel::<Option<Tensor<Q::T, Q::B>>>();
         let (generated, decoded) = std::thread::scope(|s| {
             let decoder = s.spawn(move || self.decode_worker(latent_rx, on_chunk));
-            let generated = self.autoregressive_generation(
-                &mut state,
-                max_gen_len,
-                frames_after_eos,
-                &latent_tx,
-                stop,
-            );
+            let generated = self.autoregressive_generation(&mut state, max_gen_len, frames_after_eos, &latent_tx, stop);
             // Closes the stream, also on error, so that the decoder finishes.
             let _ = latent_tx.send(None);
-            let decoded = decoder
-                .join()
-                .unwrap_or_else(|_| Err(anyhow::anyhow!("the decoder panicked")));
+            let decoded = decoder.join().unwrap_or_else(|_| Err(anyhow::anyhow!("the decoder panicked")));
             (generated, decoded)
         });
         generated?;
@@ -499,9 +426,7 @@ impl<Q: CpuBackend> TtsModel<Q> {
             if std::env::var("KPOCKET_TTS_ERROR_WITHOUT_EOS").is_ok_and(|v| v == "1") {
                 bail!("Generation reached maximum length without EOS!")
             }
-            log::warn!(
-                "Maximum generation length reached without EOS, this very often indicates an error."
-            );
+            log::warn!("Maximum generation length reached without EOS, this very often indicates an error.");
         }
         if !step_times.is_empty() {
             let mean = step_times.iter().sum::<u128>() / step_times.len() as u128;
@@ -543,11 +468,7 @@ impl<Q: CpuBackend> TtsModel<Q> {
             if fade_in {
                 let n = fade_len.min(pcm.len());
                 for (i, sample) in pcm[..n].iter_mut().enumerate() {
-                    *sample *= if fade_len > 1 {
-                        i as f32 / (fade_len - 1) as f32
-                    } else {
-                        0.0
-                    };
+                    *sample *= if fade_len > 1 { i as f32 / (fade_len - 1) as f32 } else { 0.0 };
                 }
                 fade_in = false;
             }
@@ -567,10 +488,7 @@ pub fn is_safetensors_source(source: &str) -> bool {
         let rest = source.split(['?', '#']).next().unwrap_or(source);
         rest.splitn(4, '/').nth(3).unwrap_or("").to_string()
     } else if source.starts_with("hf://") {
-        source
-            .rsplit_once('@')
-            .map_or(source, |(path, _)| path)
-            .to_string()
+        source.rsplit_once('@').map_or(source, |(path, _)| path).to_string()
     } else {
         source.to_string()
     };
@@ -584,9 +502,7 @@ mod tests {
     #[test]
     fn safetensors_sources_are_recognized() {
         assert!(is_safetensors_source("voice.safetensors"));
-        assert!(is_safetensors_source(
-            "https://example.com/v.safetensors?download=1"
-        ));
+        assert!(is_safetensors_source("https://example.com/v.safetensors?download=1"));
         assert!(is_safetensors_source("hf://a/b/v.safetensors@main"));
         assert!(!is_safetensors_source("hf://a/b/v.wav"));
         assert!(!is_safetensors_source("alba"));

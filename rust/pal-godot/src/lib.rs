@@ -212,7 +212,7 @@ impl PalNode {
         let user_name = self.user_name.to_string();
         // Pocket's model comes from `model_dir/pocket` if it's there (`push-models` copies it). Android can't
         // download it (its TLS check needs Java code); the desktop downloads it otherwise.
-        let local = pal_brain::pocket_speaker::use_local_files(&dir.join("pocket"), language);
+        let local = pal_brain::tts::use_local_files(&dir.join("pocket"), language);
         if cfg!(target_os = "android") && !local {
             let message = format!("no Pocket TTS model in {}/pocket", dir.display());
             self.signals().failed().emit(&message);

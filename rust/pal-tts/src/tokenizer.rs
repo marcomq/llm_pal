@@ -11,9 +11,8 @@ pub enum Tokenizer {
 
 impl Tokenizer {
     pub fn load(n_bins: usize, tokenizer_path: &str, kind: &str) -> Result<Self> {
-        let is_json = kind == "tokenizers"
-            || kind == "json"
-            || tokenizer_path.split('@').next().unwrap().ends_with(".json");
+        let is_json =
+            kind == "tokenizers" || kind == "json" || tokenizer_path.split('@').next().unwrap().ends_with(".json");
         let local_path = crate::download::download_if_necessary(tokenizer_path)?;
         if is_json {
             log::info!("Loading tokenizers json from {tokenizer_path}");
@@ -33,11 +32,7 @@ impl Tokenizer {
     pub fn encode(&self, text: &str) -> Result<Vec<u32>> {
         match self {
             // `add_special_tokens` as in Python's `Tokenizer.encode` default.
-            Self::Json(tok) => Ok(tok
-                .encode(text, true)
-                .map_err(|e| anyhow::anyhow!("{e}"))?
-                .get_ids()
-                .to_vec()),
+            Self::Json(tok) => Ok(tok.encode(text, true).map_err(|e| anyhow::anyhow!("{e}"))?.get_ids().to_vec()),
         }
     }
 
@@ -53,14 +48,10 @@ pub struct SharedTokenizer(pub Arc<Tokenizer>);
 
 impl ptts::Tokenizer for SharedTokenizer {
     fn encode(&self, text: &str) -> xn::Result<Vec<u32>> {
-        self.0
-            .encode(text)
-            .map_err(|e| xn::Error::msg(format!("{e:#}")))
+        self.0.encode(text).map_err(|e| xn::Error::msg(format!("{e:#}")))
     }
 
     fn decode(&self, tokens: &[u32]) -> xn::Result<String> {
-        self.0
-            .decode(tokens)
-            .map_err(|e| xn::Error::msg(format!("{e:#}")))
+        self.0.decode(tokens).map_err(|e| xn::Error::msg(format!("{e:#}")))
     }
 }

@@ -37,12 +37,7 @@ impl TextOptions {
         let replace_characters = config
             .replace_characters
             .iter()
-            .map(|(key, value)| {
-                (
-                    key.chars().next().unwrap(),
-                    value.clone().unwrap_or_default(),
-                )
-            })
+            .map(|(key, value)| (key.chars().next().unwrap(), value.clone().unwrap_or_default()))
             .collect();
         Self {
             pad_with_spaces_for_short_inputs: config.pad_with_spaces_for_short_inputs,
@@ -155,15 +150,8 @@ fn ensure_terminal_punctuation(text: &str) -> String {
 }
 
 /// Whether `segment_start_idx` begins right after a decimal period.
-fn is_decimal_period_boundary(
-    tokens: &[u32],
-    segment_start_idx: usize,
-    tokenizer: &dyn TextTokenizer,
-) -> Result<bool> {
-    let prefix: Vec<char> = tokenizer
-        .decode(&tokens[..segment_start_idx])?
-        .chars()
-        .collect();
+fn is_decimal_period_boundary(tokens: &[u32], segment_start_idx: usize, tokenizer: &dyn TextTokenizer) -> Result<bool> {
+    let prefix: Vec<char> = tokenizer.decode(&tokens[..segment_start_idx])?.chars().collect();
     let suffix = tokenizer.decode(&tokens[segment_start_idx..])?;
     Ok(prefix.len() >= 2
         && prefix[prefix.len() - 1] == '.'
@@ -206,10 +194,7 @@ fn segments_from_boundaries(
     boundaries: &[usize],
     tokenizer: &dyn TextTokenizer,
 ) -> Result<Vec<(usize, String)>> {
-    boundaries
-        .windows(2)
-        .map(|w| Ok((w[1] - w[0], tokenizer.decode(&tokens[w[0]..w[1]])?)))
-        .collect()
+    boundaries.windows(2).map(|w| Ok((w[1] - w[0], tokenizer.decode(&tokens[w[0]..w[1]])?))).collect()
 }
 
 /// The tokens of `text` without the first one, which carries the leading space marker.
@@ -228,8 +213,7 @@ pub fn split_into_best_sentences(
     let tokens = tokenizer.encode(text)?;
 
     let end_of_sentence_tokens = marker_tokens(tokenizer, ".!...?")?;
-    let sentence_boundaries =
-        find_boundary_indices(&tokens, &end_of_sentence_tokens, Some(tokenizer))?;
+    let sentence_boundaries = find_boundary_indices(&tokens, &end_of_sentence_tokens, Some(tokenizer))?;
     let sentences = segments_from_boundaries(&tokens, &sentence_boundaries, tokenizer)?;
 
     // Sub-split oversized sentences on commas, semicolons, and colons to prevent skipped words.
@@ -277,9 +261,7 @@ pub fn split_into_best_sentences(
         let nb_tokens = tokenizer.encode(chunk.trim())?.len();
         if nb_tokens > max_tokens {
             let preview: String = chunk.chars().take(50).collect();
-            log::warn!(
-                "Chunk has {nb_tokens} tokens (max {max_tokens}), generation may skip words: '{preview}...'"
-            );
+            log::warn!("Chunk has {nb_tokens} tokens (max {max_tokens}), generation may skip words: '{preview}...'");
         }
     }
     Ok(chunks)
@@ -294,17 +276,11 @@ mod tests {
 
     impl TextTokenizer for CharTokenizer {
         fn encode(&self, text: &str) -> Result<Vec<u32>> {
-            Ok(std::iter::once(0)
-                .chain(text.chars().map(|c| c as u32))
-                .collect())
+            Ok(std::iter::once(0).chain(text.chars().map(|c| c as u32)).collect())
         }
 
         fn decode(&self, tokens: &[u32]) -> Result<String> {
-            Ok(tokens
-                .iter()
-                .filter(|&&t| t != 0)
-                .map(|&t| char::from_u32(t).unwrap())
-                .collect())
+            Ok(tokens.iter().filter(|&&t| t != 0).map(|&t| char::from_u32(t).unwrap()).collect())
         }
     }
 
@@ -321,23 +297,14 @@ mod tests {
     #[test]
     fn prompts_are_prepared_like_python() {
         let o = options();
-        assert_eq!(
-            prepare_text_prompt("hello world", &o).unwrap(),
-            ("Hello world.".into(), 3)
-        );
+        assert_eq!(prepare_text_prompt("hello world", &o).unwrap(), ("Hello world.".into(), 3));
         assert_eq!(
             prepare_text_prompt("  one two three four five  ", &o).unwrap(),
             ("One two three four five.".into(), 1)
         );
         assert_eq!(prepare_text_prompt("Wait,", &o).unwrap().0, "Wait.");
-        assert_eq!(
-            prepare_text_prompt("He said \"hi\"", &o).unwrap().0,
-            "He said \"hi\"."
-        );
-        assert_eq!(
-            prepare_text_prompt("Is it \"so?\"", &o).unwrap().0,
-            "Is it \"so?\""
-        );
+        assert_eq!(prepare_text_prompt("He said \"hi\"", &o).unwrap().0, "He said \"hi\".");
+        assert_eq!(prepare_text_prompt("Is it \"so?\"", &o).unwrap().0, "Is it \"so?\"");
         assert_eq!(prepare_text_prompt("über", &o).unwrap().0, "Über.");
         assert_eq!(prepare_text_prompt("a\nb   c", &o).unwrap().0, "A b  c.");
         assert!(prepare_text_prompt("   ", &o).is_err());
@@ -349,10 +316,7 @@ mod tests {
 
         let mut o = options();
         o.replace_characters = [('"', String::new()), ('«', String::new())].into();
-        assert_eq!(
-            prepare_text_prompt("\"Hi?\", she said", &o).unwrap().0,
-            "Hi? she said."
-        );
+        assert_eq!(prepare_text_prompt("\"Hi?\", she said", &o).unwrap().0, "Hi? she said.");
     }
 
     // The expected values are what the Python implementation returns with the same tokenizer,
@@ -369,16 +333,13 @@ mod tests {
 
     #[test]
     fn decimal_periods_do_not_split() {
-        let chunks =
-            split_into_best_sentences(&CharTokenizer, "It costs 3.5 euros. Yes.", 5, &options())
-                .unwrap();
+        let chunks = split_into_best_sentences(&CharTokenizer, "It costs 3.5 euros. Yes.", 5, &options()).unwrap();
         assert_eq!(chunks, ["It costs 3.5 euros.", "Yes."]);
     }
 
     #[test]
     fn long_sentences_split_on_commas() {
-        let chunks =
-            split_into_best_sentences(&CharTokenizer, "aaaa, bbbb, cccc.", 8, &options()).unwrap();
+        let chunks = split_into_best_sentences(&CharTokenizer, "aaaa, bbbb, cccc.", 8, &options()).unwrap();
         assert_eq!(chunks, ["Aaaa,", "bbbb,", "cccc."]);
     }
 }
