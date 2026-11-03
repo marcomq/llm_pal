@@ -1,22 +1,18 @@
-//! Chat replies from a server, streamed: Ollama and OpenAI in the OpenAI chat format, Anthropic in its Messages
-//! format. Blocking, so it runs on the reply route's model thread like the local model.
+//! Chat replies from a server through mq-bridge: Ollama and OpenAI with `openai_chat`, Anthropic's Messages API
+//! with the streaming `http_bulk` recipe. Each text piece goes to `stream_to` as it arrives; a message on
+//! `cancel_from` with the turn as `correlation_id` stops the reply.
 
-use std::io::{BufRead, BufReader, Read};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{RecvTimeoutError, channel};
-use std::time::Duration;
+use mq_bridge::models::Endpoint;
+use serde_json::json;
 
-use serde_json::{Value, json};
-
-use crate::llm::{Llm, Message, Role};
+use crate::llm::{Message, Role};
 use crate::{Error, Result};
 
 const ANTHROPIC_VERSION: &str = "2026-10-21";
 /// Anthropic requires a limit; it also covers the model's thinking, so it is far above a spoken reply.
 const ANTHROPIC_MAX_TOKENS: u32 = 1024;
-const ERROR_BODY_CHARS: usize = 300;
-/// How often a waiting reply checks for cancellation.
-const CANCEL_POLL: Duration = Duration::from_millis(50);
+/// Longest silence of the server. Ollama may load the model first; after that, a reply may take long.
+const SILENCE_MS: u64 = 30_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Provider {
@@ -55,306 +51,215 @@ pub struct RemoteConfig {
     pub api_key: String,
 }
 
-#[derive(Clone)]
-pub struct RemoteLlm {
-    cfg: RemoteConfig,
-    agent: ureq::Agent,
-}
-
-impl RemoteLlm {
-    pub fn new(cfg: RemoteConfig) -> Self {
-        let agent = ureq::Agent::config_builder()
-            .timeout_connect(Some(Duration::from_secs(5)))
-            // Ollama may load the model first. After that, a reply may take long, as long as data keeps coming.
-            .timeout_recv_response(Some(Duration::from_secs(30)))
-            .timeout_per_read(Some(Duration::from_secs(15)))
-            .http_status_as_error(false)
-            .build()
-            .new_agent();
-        Self { cfg, agent }
+impl RemoteConfig {
+    fn url(&self) -> &str {
+        if self.url.is_empty() { self.provider.default_url() } else { &self.url }
     }
 
-    fn url(&self, path: &str) -> String {
-        let base = if self.cfg.url.is_empty() { self.cfg.provider.default_url() } else { &self.cfg.url };
-        format!("{}/{path}", base.trim_end_matches('/'))
-    }
-
-    fn send(&self, messages: &[Message]) -> Result<ureq::Body> {
-        let (provider, model, key) = (self.cfg.provider, &self.cfg.model, &self.cfg.api_key);
-        let request = match provider {
-            Provider::Anthropic => self
-                .agent
-                .post(self.url("messages"))
-                .header("x-api-key", key)
-                .header("anthropic-version", ANTHROPIC_VERSION),
-            _ => {
-                let request = self.agent.post(self.url("chat/completions"));
-                if key.is_empty() { request } else { request.header("authorization", format!("Bearer {key}")) }
-            }
+    /// The endpoint that answers a [`RemoteConfig::payload`], streaming its text to `stream_to`.
+    pub fn endpoint(&self, stream_to: &Endpoint, cancel_from: &Endpoint) -> Result<Endpoint> {
+        // Android has no OS CA store reqwest can use; trust mq-bridge's built-in roots there.
+        let tls = if cfg!(target_os = "android") { json!({"ca_file": "$.bundled"}) } else { json!({}) };
+        let endpoint = match self.provider {
+            Provider::Anthropic => json!({"http_bulk": {
+                "url": self.url(),
+                "tls": tls,
+                "headers": {"x-api-key": self.api_key, "anthropic-version": ANTHROPIC_VERSION},
+                "request_timeout_ms": SILENCE_MS,
+                "query": {
+                    "path": "/messages",
+                    "format": "json_array",
+                    "per_message": true,
+                    "request": anthropic_request(&self.model),
+                    "value": "/delta/text",
+                    "stop_reason": "/delta/stop_reason",
+                    "error": "/error/message",
+                    "stream_to": stream_to,
+                    "cancel_from": cancel_from,
+                },
+            }}),
+            provider => json!({"openai_chat": {
+                "url": self.url(),
+                "tls": tls,
+                "api_key": (!self.api_key.is_empty()).then_some(&self.api_key),
+                "model": self.model,
+                "messages_from_payload": true,
+                // Same sampling as the local model; OpenAI's reasoning models reject a temperature.
+                "options": (provider == Provider::Ollama).then(|| json!({"temperature": 0.5})),
+                "request_timeout_ms": SILENCE_MS,
+                "stream_to": stream_to,
+                "cancel_from": cancel_from,
+            }}),
         };
-        let body = request_body(provider, model, messages);
-        let response = request
-            .header("content-type", "application/json")
-            .send(body.to_string())
-            .map_err(|e| Error::Llm(format!("{}: {e}", self.url(""))))?;
-        let status = response.status();
-        let mut body = response.into_body();
-        if !status.is_success() {
-            let text = body.read_to_string().unwrap_or_default();
-            return Err(Error::Llm(format!("{status}: {}", error_message(&text))));
-        }
-        Ok(body)
+        serde_json::from_value(endpoint).map_err(|e| Error::Llm(format!("server endpoint: {e}")))
     }
-}
 
-enum Chunk {
-    Text(String),
-    Done,
-    Failed(Error),
-}
-
-impl Llm for RemoteLlm {
-    /// The request runs on its own thread, so a cancel returns at once even while the server is silent; the
-    /// thread then ends with its next piece or a timeout.
-    fn reply(&mut self, messages: &[Message], cancel: &AtomicBool, on_text: &mut dyn FnMut(&str)) -> Result<String> {
-        let (tx, rx) = channel();
-        let (llm, messages) = (self.clone(), messages.to_vec());
-        std::thread::spawn(move || {
-            let stop = AtomicBool::new(false);
-            let streamed = llm.send(&messages).and_then(|body| {
-                read_stream(llm.cfg.provider, body.into_reader(), &stop, &mut |text| {
-                    if tx.send(Chunk::Text(text.to_string())).is_err() {
-                        stop.store(true, Ordering::Relaxed);
-                    }
-                })
-            });
-            let _ = tx.send(streamed.map_or_else(Chunk::Failed, |_| Chunk::Done));
-        });
-        let mut reply = String::new();
-        while !cancel.load(Ordering::Relaxed) {
-            match rx.recv_timeout(CANCEL_POLL) {
-                Ok(Chunk::Text(text)) => {
-                    on_text(&text);
-                    reply.push_str(&text);
-                }
-                Ok(Chunk::Done) => break,
-                Ok(Chunk::Failed(e)) => return Err(e),
-                Err(RecvTimeoutError::Timeout) => {}
-                Err(RecvTimeoutError::Disconnected) => return Err(Error::Llm("request thread died".into())),
+    /// The request's payload: the messages, for Anthropic with the system prompt apart.
+    pub fn payload(&self, messages: &[Message]) -> String {
+        match self.provider {
+            Provider::Anthropic => {
+                let system: Vec<&str> =
+                    messages.iter().filter(|m| m.role == Role::System).map(|m| m.content.as_str()).collect();
+                let turns: Vec<&Message> = messages.iter().filter(|m| m.role != Role::System).collect();
+                json!({"system": system.join("\n\n"), "messages": turns}).to_string()
             }
-        }
-        Ok(reply)
-    }
-}
-
-fn request_body(provider: Provider, model: &str, messages: &[Message]) -> Value {
-    match provider {
-        // Thinking would delay the first word; low effort keeps it short.
-        Provider::Anthropic => {
-            let system: Vec<&str> =
-                messages.iter().filter(|m| m.role == Role::System).map(|m| m.content.as_str()).collect();
-            let turns: Vec<&Message> = messages.iter().filter(|m| m.role != Role::System).collect();
-            json!({
-                "model": model,
-                "max_tokens": ANTHROPIC_MAX_TOKENS,
-                "system": system.join("\n\n"),
-                "messages": turns,
-                "output_config": {"effort": "low"},
-                "stream": true,
-            })
-        }
-        // Same sampling as the local model; OpenAI's reasoning models reject a temperature, so it keeps its default.
-        Provider::Ollama => json!({"model": model, "messages": messages, "temperature": 0.5, "stream": true}),
-        Provider::OpenAi => json!({"model": model, "messages": messages, "stream": true}),
-    }
-}
-
-/// Reads server-sent events until the stream ends or `cancel` is set, passing each text piece on.
-fn read_stream(
-    provider: Provider,
-    body: impl Read,
-    cancel: &AtomicBool,
-    on_text: &mut dyn FnMut(&str),
-) -> Result<String> {
-    let mut reply = String::new();
-    for line in BufReader::new(body).lines() {
-        if cancel.load(Ordering::Relaxed) {
-            break;
-        }
-        let line = line.map_err(|e| Error::Llm(e.to_string()))?;
-        let Some(data) = line.strip_prefix("data:").map(str::trim) else { continue };
-        if data == "[DONE]" {
-            break;
-        }
-        let event: Value = serde_json::from_str(data).map_err(|e| Error::Llm(format!("{e}: {data}")))?;
-        match piece(provider, &event)? {
-            Piece::Text(text) if !text.is_empty() => {
-                on_text(text);
-                reply.push_str(text);
-            }
-            Piece::End => break,
-            _ => {}
+            _ => json!(messages).to_string(),
         }
     }
-    Ok(reply)
 }
 
-enum Piece<'a> {
-    Text(&'a str),
-    Other,
-    End,
-}
-
-fn piece(provider: Provider, event: &Value) -> Result<Piece<'_>> {
-    if let Some(error) = event.get("error") {
-        let message = error.get("message").and_then(Value::as_str).unwrap_or("unknown error");
-        return Err(Error::Llm(message.to_string()));
-    }
-    let text = match provider {
-        Provider::Anthropic => match event["type"].as_str() {
-            Some("message_stop") => return Ok(Piece::End),
-            Some("content_block_delta") if event["delta"]["type"] == "text_delta" => event["delta"]["text"].as_str(),
-            _ => None,
-        },
-        _ => event["choices"][0]["delta"]["content"].as_str(),
-    };
-    Ok(text.map_or(Piece::Other, Piece::Text))
-}
-
-/// The server's error message from a JSON error body, else the start of the body.
-fn error_message(body: &str) -> String {
-    let parsed: Option<Value> = serde_json::from_str(body).ok();
-    let message = parsed.as_ref().and_then(|v| v["error"]["message"].as_str().or(v["error"].as_str()));
-    message.map_or_else(|| body.chars().take(ERROR_BODY_CHARS).collect(), str::to_string)
+/// The Messages request around a payload. Thinking would delay the first word; low effort keeps it short.
+fn anthropic_request(model: &str) -> String {
+    let body = json!({
+        "model": model,
+        "max_tokens": ANTHROPIC_MAX_TOKENS,
+        "system": "SYSTEM",
+        "messages": "MESSAGES",
+        "output_config": {"effort": "low"},
+        "stream": true,
+    });
+    // Serializing escapes the literal text; the template escapes what the payload puts in.
+    body.to_string().replacen(r#""system":"SYSTEM""#, r#""system":"${payload:system}""#, 1).replacen(
+        r#""messages":"MESSAGES""#,
+        r#""messages":${payload:messages | raw}"#,
+        1,
+    )
 }
 
 #[cfg(test)]
 mod tests {
+    use std::io::{Read, Write};
+    use std::time::{Duration, Instant};
+
+    use mq_bridge::models::MemoryConfig;
+    use mq_bridge::{CanonicalMessage, Publisher, get_or_create_channel};
+    use serde_json::Value;
+
     use super::*;
 
-    fn stream(provider: Provider, sse: &str) -> Result<(String, Vec<String>)> {
-        let mut pieces = Vec::new();
-        let reply = read_stream(provider, sse.as_bytes(), &AtomicBool::new(false), &mut |t| pieces.push(t.into()))?;
-        Ok((reply, pieces))
-    }
-
-    #[test]
-    fn reads_openai_stream() {
-        let sse = "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\"}}]}\n\n\
-                   data: {\"choices\":[{\"delta\":{\"content\":\"Hallo\"}}]}\n\n\
-                   data: {\"choices\":[{\"delta\":{\"content\":\" Michael.\"}}]}\n\n\
-                   data: [DONE]\n\n\
-                   data: {\"choices\":[{\"delta\":{\"content\":\"late\"}}]}\n";
-        let (reply, pieces) = stream(Provider::Ollama, sse).unwrap();
-        assert_eq!(reply, "Hallo Michael.");
-        assert_eq!(pieces, ["Hallo", " Michael."]);
-    }
-
-    #[test]
-    fn reads_anthropic_stream_without_thinking() {
-        let sse = "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{}}\n\n\
-                   event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"hm\"}}\n\n\
-                   event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"text_delta\",\"text\":\"Hello\"}}\n\n\
-                   event: ping\ndata: {\"type\":\"ping\"}\n\n\
-                   event: message_stop\ndata: {\"type\":\"message_stop\"}\n";
-        let (reply, _) = stream(Provider::Anthropic, sse).unwrap();
-        assert_eq!(reply, "Hello");
-    }
-
-    #[test]
-    fn stream_errors_are_reported() {
-        let sse = "event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"Overloaded\"}}\n";
-        let e = stream(Provider::Anthropic, sse).unwrap_err();
-        assert!(e.to_string().contains("Overloaded"), "{e}");
-    }
-
-    #[test]
-    fn cancel_stops_reading() {
-        let sse = "data: {\"choices\":[{\"delta\":{\"content\":\"x\"}}]}\n";
-        let reply = read_stream(Provider::OpenAi, sse.as_bytes(), &AtomicBool::new(true), &mut |_| {}).unwrap();
-        assert!(reply.is_empty());
-    }
-
-    #[test]
-    fn anthropic_gets_the_system_prompt_apart() {
-        let messages = [Message::new(Role::System, "Be KITT."), Message::new(Role::User, "Hi")];
-        let body = request_body(Provider::Anthropic, "claude-opus-5-5", &messages);
-        assert_eq!(body["system"], "Be KITT.");
-        assert_eq!(body["messages"], json!([{"role": "user", "content": "Hi"}]));
-    }
-
-    /// Answers one request with `response` and hands back what was requested.
-    fn serve_once(response: &'static str) -> (String, std::thread::JoinHandle<String>) {
-        use std::io::Write;
+    /// Answers one request with `response`, or holds it unanswered when `None`, and hands back the request.
+    fn serve_once(response: Option<String>) -> (String, std::thread::JoinHandle<String>) {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let url = format!("http://{}/v1", listener.local_addr().unwrap());
         let server = std::thread::spawn(move || {
             let (mut socket, _) = listener.accept().unwrap();
-            let mut request = vec![0; 8192];
+            let mut request = vec![0; 16384];
             let n = socket.read(&mut request).unwrap();
-            socket.write_all(response.as_bytes()).unwrap();
+            match response {
+                Some(response) => socket.write_all(response.as_bytes()).unwrap(),
+                None => std::thread::sleep(Duration::from_secs(5)),
+            }
             String::from_utf8_lossy(&request[..n]).into_owned()
         });
         (url, server)
     }
 
-    fn remote(provider: Provider, url: String) -> RemoteLlm {
-        RemoteLlm::new(RemoteConfig { provider, url, model: "m".into(), api_key: "secret".into() })
+    fn sse(events: &str) -> Option<String> {
+        Some(format!("HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n{events}"))
+    }
+
+    fn remote(provider: Provider, url: String) -> RemoteConfig {
+        RemoteConfig { provider, url, model: "m".into(), api_key: "secret".into() }
+    }
+
+    fn meta<'a>(msg: &'a CanonicalMessage, key: &str) -> &'a str {
+        msg.metadata.get(key).map_or("", String::as_str)
+    }
+
+    /// Asks as turn "t" on topics named after `name`; returns the answer and the token messages.
+    fn ask(
+        cfg: &RemoteConfig,
+        messages: &[Message],
+        name: &str,
+        cancel_after: Option<Duration>,
+    ) -> (mq_bridge::anyhow::Result<CanonicalMessage>, Vec<CanonicalMessage>) {
+        let (tokens, cancels) = (format!("{name}.tokens"), format!("{name}.cancel"));
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let answer = rt.block_on(async {
+            let cancel_from = Endpoint::new_memory(&cancels, 16);
+            let endpoint = cfg.endpoint(&Endpoint::new_memory(&tokens, 64), &cancel_from).unwrap();
+            let server = Publisher::new(endpoint).await.unwrap();
+            if let Some(after) = cancel_after {
+                let cancel = Publisher::new(cancel_from).await.unwrap();
+                let rt = tokio::runtime::Handle::current();
+                std::thread::spawn(move || {
+                    std::thread::sleep(after);
+                    rt.block_on(cancel.send(CanonicalMessage::from("").with_metadata_kv("correlation_id", "t")))
+                });
+            }
+            let request = CanonicalMessage::from(cfg.payload(messages)).with_metadata_kv("correlation_id", "t");
+            server.request(request).await
+        });
+        (answer, get_or_create_channel(&MemoryConfig::new(tokens, None)).drain_messages())
+    }
+
+    fn body(request: &str) -> Value {
+        serde_json::from_str(request.split("\r\n\r\n").nth(1).unwrap()).unwrap()
     }
 
     #[test]
-    fn streams_a_reply_over_http() {
-        let (url, server) = serve_once(
-            "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n\
-             data: {\"choices\":[{\"delta\":{\"content\":\"Hi\"}}]}\n\ndata: [DONE]\n\n",
-        );
-        let reply = remote(Provider::OpenAi, url).reply(
-            &[Message::new(Role::User, "Hello")],
-            &AtomicBool::new(false),
-            &mut |_| {},
-        );
-        assert_eq!(reply.unwrap(), "Hi");
+    fn openai_streams_pieces_and_ends_complete() {
+        let (url, server) = serve_once(sse("data: {\"choices\":[{\"delta\":{\"content\":\"Hallo\"}}]}\n\n\
+             data: {\"choices\":[{\"delta\":{\"content\":\" Michael.\"},\"finish_reason\":\"stop\"}]}\n\n\
+             data: [DONE]\n\n"));
+        let messages = [Message::new(Role::System, "Be KITT."), Message::new(Role::User, "Hi")];
+        let (answer, tokens) = ask(&remote(Provider::OpenAi, url), &messages, "test.openai", None);
+        assert_eq!(answer.unwrap().get_payload_str(), "\"Hallo Michael.\"");
+        let texts: Vec<_> = tokens.iter().map(|t| t.get_payload_str().to_string()).collect();
+        assert_eq!(texts, ["Hallo", " Michael.", ""]);
+        let last = tokens.last().unwrap();
+        assert_eq!((meta(last, "correlation_id"), meta(last, "mqb.stream.status")), ("t", "complete"));
         let request = server.join().unwrap();
         assert!(request.starts_with("POST /v1/chat/completions"), "{request}");
-        assert!(request.contains("authorization: Bearer secret"), "{request}");
+        assert!(request.to_lowercase().contains("authorization: bearer secret"), "{request}");
+        assert_eq!(body(&request)["messages"][0], json!({"role": "system", "content": "Be KITT."}));
     }
 
     #[test]
-    fn cancel_returns_while_the_server_is_silent() {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let url = format!("http://{}/v1", listener.local_addr().unwrap());
-        let cancel = std::sync::Arc::new(AtomicBool::new(false));
-        let c = cancel.clone();
-        std::thread::spawn(move || {
-            let _held = listener.accept();
-            std::thread::sleep(Duration::from_millis(200));
-            c.store(true, Ordering::Relaxed);
-            std::thread::sleep(Duration::from_secs(5));
-        });
-        let started = std::time::Instant::now();
-        let reply = remote(Provider::OpenAi, url).reply(&[], &cancel, &mut |_| {}).unwrap();
-        assert!(reply.is_empty());
-        assert!(started.elapsed() < Duration::from_secs(1), "{:?}", started.elapsed());
+    fn anthropic_gets_the_system_prompt_apart() {
+        let (url, server) = serve_once(sse(
+            "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"hm\"}}\n\n\
+             event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"Hello\"}}\n\n\
+             event: ping\ndata: {\"type\":\"ping\"}\n\n\
+             event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"}}\n\n\
+             event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+        ));
+        let messages = [Message::new(Role::System, "Be \"KITT\"."), Message::new(Role::User, "Hi")];
+        let (answer, _) = ask(&remote(Provider::Anthropic, url), &messages, "test.anthropic", None);
+        assert_eq!(answer.unwrap().get_payload_str(), "\"Hello\"");
+        let request = server.join().unwrap();
+        assert!(request.starts_with("POST /v1/messages"), "{request}");
+        assert!(request.contains("x-api-key: secret") && request.contains("anthropic-version"), "{request}");
+        let body = body(&request);
+        assert_eq!(body["system"], "Be \"KITT\".");
+        assert_eq!(body["messages"], json!([{"role": "user", "content": "Hi"}]));
+        assert_eq!((&body["model"], &body["stream"]), (&json!("m"), &json!(true)));
     }
 
     #[test]
-    fn http_errors_carry_the_server_message() {
+    fn a_refused_request_ends_with_the_server_message_before_any_text() {
         let body = r#"{"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}"#;
         let response = format!(
             "HTTP/1.1 401 Unauthorized\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{body}",
             body.len()
         );
-        let (url, server) = serve_once(Box::leak(response.into_boxed_str()));
-        let e = remote(Provider::Anthropic, url).reply(&[], &AtomicBool::new(false), &mut |_| {}).unwrap_err();
-        assert!(e.to_string().contains("401") && e.to_string().contains("invalid x-api-key"), "{e}");
-        let request = server.join().unwrap();
-        assert!(request.contains("x-api-key: secret") && request.contains("anthropic-version"), "{request}");
+        let (url, _server) = serve_once(Some(response));
+        let (answer, tokens) = ask(&remote(Provider::Anthropic, url), &[], "test.refused", None);
+        assert!(answer.is_err());
+        let [last] = tokens.as_slice() else { panic!("{tokens:?}") };
+        assert_eq!((meta(last, "mqb.stream.status"), meta(last, "mqb.stream.index")), ("error", "0"));
+        let error = last.get_payload_str();
+        assert!(error.contains("401") && error.contains("invalid x-api-key"), "{error}");
     }
 
     #[test]
-    fn error_bodies_are_shortened_to_their_message() {
-        assert_eq!(error_message(r#"{"error":{"message":"invalid x-api-key"}}"#), "invalid x-api-key");
-        assert_eq!(error_message(r#"{"error":"model not found"}"#), "model not found");
-        assert_eq!(error_message("plain"), "plain");
+    fn a_cancel_stops_a_silent_server() {
+        let (url, _server) = serve_once(None);
+        let started = Instant::now();
+        let (answer, tokens) =
+            ask(&remote(Provider::Ollama, url), &[], "test.cancel", Some(Duration::from_millis(200)));
+        assert!(started.elapsed() < Duration::from_secs(2), "{:?}", started.elapsed());
+        assert_eq!(meta(&answer.unwrap(), "mqb.stream.status"), "cancelled");
+        assert_eq!(meta(tokens.last().unwrap(), "mqb.stream.status"), "cancelled");
     }
 }

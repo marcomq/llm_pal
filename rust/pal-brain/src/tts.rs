@@ -2,9 +2,10 @@
 //! owns the pal-core playback (cpal streams stay on their thread), which also provides the output level.
 
 use std::path::Path;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{Sender, channel, sync_channel};
+use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use pal_core::playback::{Playback, PlaybackState};
 use pal_tts::PocketTts;
@@ -28,6 +29,7 @@ pub struct PocketSpeaker {
     pending: Arc<AtomicUsize>,
     cut: Arc<AtomicBool>,
     output: Arc<PlaybackState>,
+    audio_start: Arc<Mutex<Option<Instant>>>,
 }
 
 impl PocketSpeaker {
@@ -42,10 +44,11 @@ impl PocketSpeaker {
         let generation = Arc::new(AtomicU64::new(0));
         let pending = Arc::new(AtomicUsize::new(0));
         let cut = Arc::new(AtomicBool::new(false));
+        let audio_start = Arc::new(Mutex::new(None));
 
         let (audio_tx, audio_rx) = channel::<Audio>();
         let (ready_tx, ready_rx) = sync_channel(1);
-        let (g, p) = (generation.clone(), pending.clone());
+        let (g, p, started) = (generation.clone(), pending.clone(), audio_start.clone());
         std::thread::spawn(move || {
             let mut playback = match Playback::start() {
                 Ok(pb) => pb,
@@ -56,6 +59,9 @@ impl PocketSpeaker {
                 match audio {
                     Audio::Chunk(gen_of_pcm, pcm) => {
                         if gen_of_pcm == g.load(Ordering::SeqCst) {
+                            if let Ok(mut at) = started.lock() {
+                                at.get_or_insert_with(Instant::now);
+                            }
                             playback.play(&pcm, rate);
                         }
                     }
@@ -87,7 +93,7 @@ impl PocketSpeaker {
                 let _ = audio_tx.send(Audio::End);
             }
         });
-        Ok(Self { tx, generation, pending, cut, output })
+        Ok(Self { tx, generation, pending, cut, output, audio_start })
     }
 
     pub fn output(&self) -> Arc<PlaybackState> {
@@ -119,6 +125,11 @@ impl PocketSpeaker {
         self.generation.fetch_add(1, Ordering::SeqCst);
         self.cut.store(true, Ordering::SeqCst);
         self.output.stop();
+    }
+
+    /// When the first audio since the previous call went to playback.
+    pub fn take_audio_start(&self) -> Option<Instant> {
+        self.audio_start.lock().ok()?.take()
     }
 
     pub fn speaking(&self) -> bool {

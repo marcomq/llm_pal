@@ -30,7 +30,6 @@ Never repeat it and never write square brackets yourself.",
         ("[question] Tell me a joke.", "Gladly, Michael. Two tires meet. One says: I'm so flat today."),
     ],
     jokes: include_str!("jokes_en.txt"),
-    joke_offer: "When it fits well, tell one of these jokes word for word:",
     pool: include_str!("pool_en.txt"),
     filler: &[
         "michael", "kitt", "have", "just", "really", "today", "still", "again", "always", "about", "would", "could",

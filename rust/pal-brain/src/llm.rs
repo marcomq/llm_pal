@@ -1,7 +1,8 @@
 //! Chat replies from a local GGUF model via llama.cpp, streamed token by token and cancellable.
 
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::num::NonZeroU32;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use llama_cpp_2::context::LlamaContext;
@@ -66,6 +67,7 @@ pub struct LocalLlm {
     cfg: LlmConfig,
     threads: i32,
     banned: Vec<LlamaLogitBias>,
+    path: PathBuf,
 }
 
 fn err(e: impl std::fmt::Display) -> Error {
@@ -76,6 +78,7 @@ impl LocalLlm {
     pub fn new(model: &Path, cfg: LlmConfig) -> Result<Self> {
         let mut backend = LlamaBackend::init().map_err(err)?;
         backend.void_logs();
+        let path = model.to_path_buf();
         let model = LlamaModel::load_from_file(&backend, model, &LlamaModelParams::default()).map_err(err)?;
         let threads = std::thread::available_parallelism().map_or(4, |n| n.get().min(4)) as i32;
         let vocab = model.vocab();
@@ -84,7 +87,7 @@ impl LocalLlm {
             .filter(|&t| unspeakable(&vocab.token_to_piece(t, false, None)))
             .map(|t| LlamaLogitBias::new(t, f32::NEG_INFINITY))
             .collect();
-        Ok(Self { model, backend, cfg, threads, banned })
+        Ok(Self { model, backend, cfg, threads, banned, path })
     }
 }
 
@@ -111,6 +114,7 @@ impl LocalLlm {
             last_prefill: 0,
             turns: 0,
             fixed: 1,
+            store: false,
         })
     }
 }
@@ -131,6 +135,8 @@ pub struct LlmSession<'m> {
     /// Varies the seed per reply; with the same seed, similar prompts drew the same reply again.
     turns: u32,
     fixed: usize,
+    /// Keeps the state after the fixed messages in a file next to the model.
+    store: bool,
 }
 
 impl LlmSession<'_> {
@@ -140,9 +146,11 @@ impl LlmSession<'_> {
     }
 
     /// Leading messages that every prompt shares, such as the system prompt and sample turns; the cache keeps a
-    /// checkpoint after them, so a change further on doesn't make the model read them again.
+    /// checkpoint after them, so a change further on doesn't make the model read them again. The state after them
+    /// is also saved next to the model, so the next start loads it instead of reading them.
     pub fn set_fixed_messages(&mut self, n: usize) {
         self.fixed = n.max(1);
+        self.store = true;
     }
 
     /// Keeps at most the first `keep` cached tokens: all of them if the memory can be cut there, else up to the
@@ -199,13 +207,18 @@ impl LlmSession<'_> {
         let n_prompt = prompt.len();
         let same = self.cached.iter().zip(prompt).take_while(|(a, b)| a == b).count().min(n_prompt - logits as usize);
         self.rewind(same)?;
-        self.last_prefill = n_prompt - self.cached.len();
 
-        // The fixed messages end where the next message starts.
+        // The fixed messages end where the next message starts, or with the prompt if it holds just them.
         let vocab = self.llm.model.vocab();
         let im_start = vocab.tokenize("<|im_start|>".as_bytes(), false, true).first().copied();
-        let fixed_end =
-            prompt.iter().enumerate().filter(|(_, t)| Some(**t) == im_start).nth(self.fixed).map(|(i, _)| i);
+        let starts: Vec<usize> =
+            prompt.iter().enumerate().filter(|(_, t)| Some(**t) == im_start).map(|(i, _)| i).collect();
+        let fixed_end = starts.get(self.fixed).copied().or((starts.len() == self.fixed).then_some(n_prompt));
+        if let Some(e) = fixed_end.filter(|&e| self.store && self.cached.is_empty() && e + logits as usize <= n_prompt)
+        {
+            self.restore(&prompt[..e]);
+        }
+        self.last_prefill = n_prompt - self.cached.len();
         while self.cached.len() < n_prompt {
             let start = self.cached.len();
             let stop = match fixed_end {
@@ -222,8 +235,48 @@ impl LlmSession<'_> {
             if Some(stop) == fixed_end || stop == n_prompt {
                 self.checkpoint(fixed_end);
             }
+            if Some(stop) == fixed_end && self.store {
+                self.save();
+            }
         }
         Ok(())
+    }
+
+    /// The file for the state after `fixed`; another prompt or model gets another file.
+    fn state_file(&self, fixed: &[LlamaToken]) -> PathBuf {
+        let mut hasher = DefaultHasher::new();
+        fixed.iter().for_each(|t| t.0.hash(&mut hasher));
+        let mut name = self.llm.path.clone().into_os_string();
+        name.push(format!(".{:016x}.state", hasher.finish()));
+        name.into()
+    }
+
+    /// Loads the state an earlier start saved after `fixed`, if it holds exactly these tokens.
+    fn restore(&mut self, fixed: &[LlamaToken]) {
+        let path = self.state_file(fixed);
+        if !path.exists() {
+            return;
+        }
+        match self.ctx.state_seq_load_file(&path, 0, fixed.len()) {
+            Ok((tokens, _)) if tokens == fixed => {
+                self.cached = tokens;
+                self.checkpoint(Some(fixed.len()));
+            }
+            _ => self.ctx.clear_kv_cache(),
+        }
+    }
+
+    /// Saves the cache, which holds just the fixed messages, unless a file for them exists.
+    fn save(&self) {
+        let path = self.state_file(&self.cached);
+        if path.exists() {
+            return;
+        }
+        let tmp = path.with_extension("tmp");
+        let saved = self.ctx.state_seq_save_file(&tmp, 0, &self.cached).map_err(err);
+        if let Err(e) = saved.and_then(|_| std::fs::rename(&tmp, &path).map_err(err)) {
+            eprintln!("llm_pal: saving the prompt state: {e}");
+        }
     }
 
     fn cut(&mut self, from: usize) -> Result<bool> {
@@ -389,5 +442,44 @@ mod tests {
             "<|im_start|>system\nBe brief.<|im_end|>\n<|im_start|>user\nHello<|im_end|>\n\
              <|im_start|>assistant\n<think>\n\n</think>\n\n"
         );
+    }
+
+    #[test]
+    #[ignore = "needs the GGUF model"]
+    fn the_next_start_loads_the_fixed_messages_from_a_file() {
+        let model = std::env::var_os("PAL_LLM")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../models/Qwen3.5-2B-Q4_K_M.gguf"));
+        let dir = std::env::temp_dir().join(format!("pal-state-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let link = dir.join("model.gguf");
+        std::os::unix::fs::symlink(std::fs::canonicalize(&model).unwrap(), &link).unwrap();
+        let llm = LocalLlm::new(&link, LlmConfig::default()).unwrap();
+        let fixed = [
+            Message::new(Role::System, "Be brief."),
+            Message::new(Role::User, "Hi"),
+            Message::new(Role::Assistant, "Hello."),
+        ];
+        let mut asked = fixed.to_vec();
+        asked.push(Message::new(Role::User, "How are you?"));
+
+        let mut first = llm.session().unwrap();
+        first.set_fixed_messages(fixed.len());
+        first.prefill(&fixed).unwrap();
+        assert!(first.last_prefill() > 0);
+        drop(first);
+        let saved = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().extension().is_some_and(|x| x == "state"));
+        assert_eq!(saved.count(), 1);
+
+        let mut next = llm.session().unwrap();
+        next.set_fixed_messages(fixed.len());
+        next.prefill(&fixed).unwrap();
+        assert_eq!(next.last_prefill(), 0);
+        let reply = next.reply(&asked, &AtomicBool::new(false), &mut |_| {}).unwrap();
+        assert!(!reply.is_empty());
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

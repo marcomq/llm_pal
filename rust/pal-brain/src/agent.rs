@@ -18,7 +18,7 @@ use crate::language::Language;
 use crate::llm::{LlmConfig, LocalLlm};
 use crate::persona::Persona;
 use crate::prosody_tags::{self, ProsodyTags};
-use crate::remote::{RemoteConfig, RemoteLlm};
+use crate::remote::RemoteConfig;
 use crate::routes::{Brain, ReplyRoutes, Spoken};
 use crate::stt::Recognizer;
 use crate::tts::PocketSpeaker;
@@ -177,6 +177,27 @@ fn speech_end(at: Instant, seg: &Segment) -> Instant {
     at.checked_sub(Duration::from_millis(seg.silence_ms)).unwrap_or(at)
 }
 
+/// One turn's milestones, logged in ms from the end of speech once its first audio played; negative for a reply
+/// prepared during a pause.
+struct Timing {
+    turn: String,
+    ended: Instant,
+    marks: Vec<(&'static str, Option<Instant>)>,
+}
+
+impl Timing {
+    fn log(&self, audio: Option<Instant>) {
+        let ms = |at: Instant| match at.checked_duration_since(self.ended) {
+            Some(after) => after.as_millis() as i64,
+            None => -(self.ended.duration_since(at).as_millis() as i64),
+        };
+        let parts: Vec<String> = (self.marks.iter().copied().chain([("audio", audio)]))
+            .map(|(name, at)| at.map_or(format!("{name} -"), |at| format!("{name} {}", ms(at))))
+            .collect();
+        eprintln!("llm_pal: {} ms after end of speech: {}", self.turn, parts.join(", "));
+    }
+}
+
 fn joined<T>(loader: std::thread::JoinHandle<Result<T>>, error: fn(String) -> Error) -> Result<T> {
     loader.join().unwrap_or_else(|_| Err(error("loading panicked".into())))
 }
@@ -283,7 +304,7 @@ fn converse(cfg: &AgentConfig, shared: &Shared, tx: &Sender<AgentEvent>) -> Resu
         None => Brain::Local(local()?),
         Some(remote) => {
             let fallback = if cfg.fallback { Some(local()?) } else { None };
-            Brain::Remote { server: RemoteLlm::new(remote.clone()), fallback }
+            Brain::Remote { server: remote.clone(), fallback }
         }
     };
     took("llm loaded");
@@ -328,7 +349,14 @@ fn converse(cfg: &AgentConfig, shared: &Shared, tx: &Sender<AgentEvent>) -> Resu
     // Speech of an unfinished sentence, put before the next segment.
     let mut carry = None::<Vec<f32>>;
     let mut turns = 0u64;
+    let mut timing = None::<Timing>;
     while !shared.quit.load(Ordering::SeqCst) {
+        if let Some(t) = &timing
+            && let Some(audio) = speaker.take_audio_start()
+        {
+            t.log(Some(audio));
+            timing = None;
+        }
         let speaking = speaker.speaking();
         active.store(speaking, Ordering::Relaxed);
         shared.set(if speaking { State::Speaking } else { State::Listening });
@@ -361,6 +389,10 @@ fn converse(cfg: &AgentConfig, shared: &Shared, tx: &Sender<AgentEvent>) -> Resu
 
         shared.set(State::Thinking);
         let t0 = Instant::now();
+        if let Some(t) = timing.take() {
+            t.log(None);
+        }
+        speaker.take_audio_start();
         let tags_before = tags.clone();
         let text = match stt.transcribe(&seg.pcm) {
             Ok(text) => text,
@@ -370,6 +402,7 @@ fn converse(cfg: &AgentConfig, shared: &Shared, tx: &Sender<AgentEvent>) -> Resu
             }
         };
         let stt_ms = t0.elapsed().as_millis();
+        let text_at = Instant::now();
         if let Some(dir) = &record_dir
             && let Err(e) = record(dir, &seg.pcm, &text)
         {
@@ -402,11 +435,13 @@ fn converse(cfg: &AgentConfig, shared: &Shared, tx: &Sender<AgentEvent>) -> Resu
             tags = tags_before;
             continue;
         }
+        let sent_at = Instant::now();
 
         let mut ended = (!early).then(|| speech_end(t0, &seg));
         let mut held = early;
         let mut spoken = Vec::new();
         let mut first_sentence_ms = None;
+        let (mut first_piece, mut first_sentence) = (None, None);
         let mut finished = false;
         while !shared.quit.load(Ordering::SeqCst) {
             // A held reply settles on the segment's end (speak it) or the user going on (drop it); other events
@@ -415,10 +450,14 @@ fn converse(cfg: &AgentConfig, shared: &Shared, tx: &Sender<AgentEvent>) -> Resu
             match input {
                 Input::Spoken(Spoken::Said { turn: of, text: said, at }) if of == turn => {
                     first_sentence_ms.get_or_insert(ended.map_or(0, |e| at.saturating_duration_since(e).as_millis()));
+                    first_sentence.get_or_insert(at);
                     active.store(true, Ordering::Relaxed);
                     shared.set(State::Speaking);
                     send(AgentEvent::Said(said.clone()));
                     spoken.push(said);
+                }
+                Input::Spoken(Spoken::FirstPiece { turn: of, at }) if of == turn => {
+                    first_piece.get_or_insert(at);
                 }
                 Input::Spoken(Spoken::Done { turn: of }) if of == turn => {
                     finished = true;
@@ -465,6 +504,17 @@ fn converse(cfg: &AgentConfig, shared: &Shared, tx: &Sender<AgentEvent>) -> Resu
             tags = tags_before;
             continue;
         }
+        timing = Some(Timing {
+            turn: turn.clone(),
+            ended: ended.unwrap_or(t0),
+            marks: vec![
+                ("segment", Some(t0)),
+                ("text", Some(text_at)),
+                ("prompt sent", Some(sent_at)),
+                ("first token", first_piece),
+                ("first sentence", first_sentence),
+            ],
+        });
         let reply = spoken.join(" ");
         send(AgentEvent::TurnDone {
             reply: reply.clone(),

@@ -2,6 +2,8 @@
 //! `pal.llm` (model) → `pal.pieces` (sentence split) → `pal.speech` (gate and speaker).
 //! Each stage runs on its own thread (`ThreadedHandler`); every message carries its turn id, and a turn is
 //! cancelled by that id in all stages. The gate holds a reply to a pause until it is released or discarded.
+//! `pal.pieces` carries tokens in the format of mq-bridge's `stream_to`, from the server, the local model and
+//! canned replies alike: the last token of a reply says how it ended.
 
 use std::cell::RefCell;
 use std::sync::Arc;
@@ -10,14 +12,14 @@ use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, channel};
 use std::time::{Duration, Instant};
 
 use mq_bridge::blocking_handler::{BlockingHandler, CancelHandle, HandlerContext, ThreadedHandler};
+use mq_bridge::endpoints::create_consumer_from_route;
 use mq_bridge::models::Endpoint;
-use mq_bridge::traits::MessagePublisher;
+use mq_bridge::traits::{MessageConsumer, MessageDisposition, MessagePublisher};
 use mq_bridge::{CanonicalMessage, Handled, HandlerError, Publisher, Route};
-use serde::{Deserialize, Serialize};
 
 use crate::language::Language;
 use crate::llm::{Llm, LlmSession, LocalLlm, Message};
-use crate::remote::RemoteLlm;
+use crate::remote::RemoteConfig;
 use crate::sentences::Sentences;
 use crate::tts::PocketSpeaker;
 use crate::{Error, Result};
@@ -29,6 +31,15 @@ const CAPACITY: usize = 1024;
 const LLM_IN: &str = "pal.llm";
 const PIECES: &str = "pal.pieces";
 const SPEECH: &str = "pal.speech";
+/// The server's tokens, read by the model stage before they go on to `pal.pieces`.
+const SERVER_TOKENS: &str = "pal.llm.tokens";
+const SERVER_CANCEL: &str = "pal.llm.cancel";
+const STREAM_INDEX: &str = "mqb.stream.index";
+const STREAM_END: &str = "mqb.stream.end";
+const STREAM_STATUS: &str = "mqb.stream.status";
+const COMPLETE: &str = "complete";
+const CANCELLED: &str = "cancelled";
+const FAILED: &str = "error";
 const ROUTES: [&str; 3] = ["pal_llm", "pal_split", "pal_speak"];
 const CLOSE_TIMEOUT: Duration = Duration::from_secs(10);
 /// How often a running reply checks whether its turn was cancelled.
@@ -53,6 +64,11 @@ pub enum Spoken {
     },
     /// The model read the messages of a `prefill`.
     Prefilled,
+    /// The first piece of a turn's reply reached the sentence split at `at`.
+    FirstPiece {
+        turn: String,
+        at: Instant,
+    },
 }
 
 /// Where replies come from.
@@ -60,7 +76,7 @@ pub enum Brain {
     Local(LocalLlm),
     /// A server; with `fallback`, the local model answers a turn the server fails on before its first word.
     Remote {
-        server: RemoteLlm,
+        server: RemoteConfig,
         fallback: Option<LocalLlm>,
     },
 }
@@ -69,12 +85,6 @@ impl From<LocalLlm> for Brain {
     fn from(model: LocalLlm) -> Self {
         Self::Local(model)
     }
-}
-
-/// The request body for the model, in the OpenAI chat format.
-#[derive(Serialize, Deserialize)]
-struct Chat {
-    messages: Vec<Message>,
 }
 
 // `LlmSession` holds a `LlamaContext`, which is not `Send`, so it can't move into the handler thread. It is
@@ -95,6 +105,18 @@ fn turn_message(kind: &str, turn: &str, text: &str) -> CanonicalMessage {
     let mut msg = message(kind, turn, text);
     msg.set_metadata(CORRELATION_ID, turn);
     msg
+}
+
+/// A piece of a reply as mq-bridge's `stream_to` sends it; `end` is the last piece's status.
+fn token(turn: &str, index: usize, text: &str, end: Option<&str>) -> CanonicalMessage {
+    let msg = CanonicalMessage::from(text)
+        .with_metadata_kv(CORRELATION_ID, turn)
+        .with_metadata_kv(STREAM_INDEX, index.to_string())
+        .with_metadata_kv(STREAM_END, end.is_some().to_string());
+    match end {
+        Some(status) => msg.with_metadata_kv(STREAM_STATUS, status),
+        None => msg,
+    }
 }
 
 fn meta<'a>(msg: &'a CanonicalMessage, key: &str) -> &'a str {
@@ -125,15 +147,15 @@ fn lower_priority() {
     }
 }
 
-/// Streams a reply as "piece" messages. Returns the model's result and whether a piece went out.
+/// Streams the local model's reply as tokens.
 fn stream(
     llm: &mut dyn Llm,
-    chat: &Chat,
+    messages: &[Message],
     turn: &str,
     ctx: &HandlerContext,
-) -> std::result::Result<(Result<String>, bool), HandlerError> {
+) -> std::result::Result<Handled, HandlerError> {
     let stop = AtomicBool::new(false);
-    let (mut sent, mut any) = (Ok(()), false);
+    let (mut sent, mut index) = (Ok(()), 0);
     let replied = std::thread::scope(|s| {
         // Sets `stop` on a route cancel even while the model sends nothing; ends as soon as the reply returns.
         let (done, finished) = channel::<()>();
@@ -146,32 +168,93 @@ fn stream(
                 }
             }
         });
-        let replied = llm.reply(&chat.messages, &stop, &mut |piece| {
+        let replied = llm.reply(messages, stop, &mut |piece| {
             if ctx.is_cancelled() || sent.is_err() {
                 stop.store(true, Ordering::Relaxed);
             } else {
-                any = true;
-                sent = ctx.emit(turn_message("piece", turn, piece));
+                sent = ctx.emit(token(turn, index, piece, None));
+                index += 1;
             }
         });
         drop(done);
         replied
     });
     sent?;
-    Ok((replied, any))
+    let last = match replied {
+        _ if ctx.is_cancelled() => token(turn, index, "", Some(CANCELLED)),
+        Ok(_) => token(turn, index, "", Some(COMPLETE)),
+        Err(e) => token(turn, index, &e.to_string(), Some(FAILED)),
+    };
+    ctx.emit(last)?;
+    Ok(Handled::Ack)
 }
 
-fn finish(replied: Result<String>, turn: &str, ctx: &HandlerContext) -> std::result::Result<Handled, HandlerError> {
-    match replied {
-        Ok(_) => ctx.emit(turn_message("end", turn, ""))?,
-        Err(e) => ctx.emit(turn_message("error", turn, &e.to_string()))?,
+/// A reply server behind mq-bridge: each request runs on the runtime, its tokens come back on `SERVER_TOKENS`.
+struct Server {
+    config: RemoteConfig,
+    chat: Publisher,
+    tokens: Box<dyn MessageConsumer>,
+    runtime: tokio::runtime::Handle,
+}
+
+impl Server {
+    async fn start(config: RemoteConfig) -> mq_bridge::anyhow::Result<Self> {
+        let tokens = Endpoint::new_memory(SERVER_TOKENS, CAPACITY);
+        let endpoint = config.endpoint(&tokens, &Endpoint::new_memory(SERVER_CANCEL, CAPACITY))?;
+        Ok(Self {
+            chat: Publisher::new(endpoint).await?,
+            tokens: create_consumer_from_route(ROUTES[0], &tokens).await?,
+            runtime: tokio::runtime::Handle::current(),
+            config,
+        })
     }
-    Ok(Handled::Ack)
+
+    /// Asks for a reply and passes its text on; returns the last token, which says how the reply ended.
+    fn reply(
+        &mut self,
+        turn: &str,
+        messages: &[Message],
+        ctx: &HandlerContext,
+    ) -> std::result::Result<CanonicalMessage, HandlerError> {
+        let request = CanonicalMessage::from(self.config.payload(messages)).with_metadata_kv(CORRELATION_ID, turn);
+        let chat = self.chat.clone();
+        // The answer is the whole text again; the tokens already carry it. It only tells of a request that died.
+        let mut answer = self.runtime.spawn(async move { chat.send(request).await });
+        let mut index = 0;
+        loop {
+            let received = self.runtime.block_on(async {
+                tokio::select! {
+                    biased;
+                    received = self.tokens.receive() => received.map(Ok).map_err(failed),
+                    answered = &mut answer => Ok(Err(match answered {
+                        Ok(Err(e)) => format!("{e:#}"),
+                        Err(e) => e.to_string(),
+                        Ok(Ok(_)) => "the server request ended without its last token".into(),
+                    })),
+                }
+            })?;
+            let received = match received {
+                Ok(received) => received,
+                Err(error) => return Ok(token(turn, index, &error, Some(FAILED))),
+            };
+            let _ = self.runtime.block_on((received.commit)(MessageDisposition::Ack));
+            let token = received.message;
+            // The rest of an earlier reply whose forwarding failed.
+            if meta(&token, CORRELATION_ID) != turn {
+                continue;
+            }
+            if meta(&token, STREAM_END) == "true" {
+                return Ok(token);
+            }
+            ctx.emit(token)?;
+            index += 1;
+        }
+    }
 }
 
 fn llm_stage(
     local: Option<&'static LocalLlm>,
-    mut remote: Option<RemoteLlm>,
+    mut server: Option<Server>,
     fixed: usize,
     report: Report,
     closed: Sender<()>,
@@ -184,21 +267,23 @@ fn llm_stage(
             return Ok(Handled::Ack);
         }
         let turn = meta(&msg, TURN);
-        let chat: Chat = serde_json::from_slice(&msg.payload).map_err(failed)?;
-        if let Some(server) = remote.as_mut() {
+        let messages: Vec<Message> = serde_json::from_slice(&msg.payload).map_err(failed)?;
+        let failure = |error: &str| ctx.emit(token(turn, 0, error, Some(FAILED))).map(|_| Handled::Ack);
+        if let Some(server) = server.as_mut() {
             // The server keeps no cache; a fallback model reads everything on its first turn instead.
             if kind == "prefill" {
                 report(Spoken::Prefilled);
                 return Ok(Handled::Ack);
             }
-            match stream(server, &chat, turn, ctx)? {
-                (Err(e), false) if local.is_some() && !ctx.is_cancelled() => {
-                    eprintln!("llm_pal: {e}; the local model answers");
-                }
-                (replied, _) => return finish(replied, turn, ctx),
+            let last = server.reply(turn, &messages, ctx)?;
+            let unanswered = meta(&last, STREAM_STATUS) == FAILED && meta(&last, STREAM_INDEX) == "0";
+            if !(unanswered && local.is_some() && !ctx.is_cancelled()) {
+                ctx.emit(last)?;
+                return Ok(Handled::Ack);
             }
+            eprintln!("llm_pal: {}; the local model answers", last.get_payload_str());
         }
-        let Some(model) = local else { return finish(Err(Error::Llm("no model".into())), turn, ctx) };
+        let Some(model) = local else { return failure("no model") };
         SESSION.with_borrow_mut(|slot| {
             if slot.is_none() {
                 lower_priority();
@@ -210,44 +295,44 @@ fn llm_stage(
                         s.set_fixed_messages(fixed);
                         slot.insert(s)
                     }
-                    Err(e) => return ctx.emit(turn_message("error", turn, &e.to_string())).map(|_| Handled::Ack),
+                    Err(e) => return failure(&e.to_string()),
                 },
             };
             if kind == "prefill" {
-                if let Err(e) = session.prefill(&chat.messages) {
+                if let Err(e) = session.prefill(&messages) {
                     eprintln!("llm_pal: {e}");
                 }
                 report(Spoken::Prefilled);
                 return Ok(Handled::Ack);
             }
-            let (replied, _) = stream(session, &chat, turn, ctx)?;
-            finish(replied, turn, ctx)
+            stream(session, &messages, turn, ctx)
         })
     }
 }
 
-fn split_stage(language: Language) -> impl BlockingHandler {
+fn split_stage(language: Language, report: Report) -> impl BlockingHandler {
     let mut sentences = Sentences::new(language);
     let mut current = String::new();
     move |msg: CanonicalMessage, ctx: &HandlerContext| {
-        let turn = meta(&msg, TURN);
-        // A cancelled turn never sends its end, so its unfinished sentence is dropped here.
+        let turn = meta(&msg, CORRELATION_ID);
+        // A cancelled turn ends without its last sentence, which is dropped here.
         if turn != current {
             sentences = Sentences::new(language);
             current = turn.to_string();
+            report(Spoken::FirstPiece { turn: current.clone(), at: Instant::now() });
         }
-        let out = match meta(&msg, KIND) {
-            "piece" => sentences.push(&msg.get_payload_str()),
-            "end" => sentences.finish().into_iter().collect(),
-            _ => Vec::new(),
+        let text = msg.get_payload_str();
+        let (out, last) = match (meta(&msg, STREAM_END), meta(&msg, STREAM_STATUS)) {
+            ("true", COMPLETE) => (sentences.finish().into_iter().collect(), Some(turn_message("end", turn, ""))),
+            ("true", FAILED) => (Vec::new(), Some(turn_message("error", turn, &text))),
+            ("true", _) => (Vec::new(), None),
+            _ => (sentences.push(&text), None),
         };
         for s in out {
             ctx.emit(turn_message("sentence", turn, &s))?;
         }
-        match meta(&msg, KIND) {
-            "end" => ctx.emit(turn_message("end", turn, ""))?,
-            "error" => ctx.emit(msg)?,
-            _ => {}
+        if let Some(last) = last {
+            ctx.emit(last)?;
         }
         Ok(Handled::Ack)
     }
@@ -324,6 +409,8 @@ pub struct ReplyRoutes {
     pieces: Publisher,
     speech: Publisher,
     cancels: Vec<CancelHandle>,
+    /// Stops a server's reply; `None` without a server.
+    server_cancel: Option<Publisher>,
     closed: Receiver<()>,
     model: Option<*mut LocalLlm>,
 }
@@ -339,7 +426,7 @@ impl ReplyRoutes {
         report: impl Fn(Spoken) + Send + Sync + 'static,
     ) -> Result<Self> {
         let report: Report = Arc::new(report);
-        let (local, remote) = match brain.into() {
+        let (local, server) = match brain.into() {
             Brain::Local(model) => (Some(model), None),
             Brain::Remote { server, fallback } => (fallback, Some(server)),
         };
@@ -349,11 +436,15 @@ impl ReplyRoutes {
         let rt = tokio::runtime::Runtime::new().map_err(routes_error)?;
         let (closed_tx, closed) = channel();
         let started = rt.block_on(async {
+            let (server, server_cancel) = match server {
+                Some(config) => (Some(Server::start(config).await?), Some(publisher(SERVER_CANCEL).await?)),
+                None => (None, None),
+            };
             let llm = ThreadedHandler::with_emitter(
-                llm_stage(shared, remote, fixed, report.clone(), closed_tx),
+                llm_stage(shared, server, fixed, report.clone(), closed_tx),
                 emitter(PIECES).await?,
             );
-            let split = ThreadedHandler::with_emitter(split_stage(language), emitter(SPEECH).await?);
+            let split = ThreadedHandler::with_emitter(split_stage(language, report.clone()), emitter(SPEECH).await?);
             let speak = ThreadedHandler::new(speak_stage(speaker, language, report));
             let cancels = vec![llm.cancel_handle(), split.cancel_handle(), speak.cancel_handle()];
             for ((name, input), handler) in ROUTES.into_iter().zip([LLM_IN, PIECES, SPEECH]).zip([llm, split, speak]) {
@@ -367,10 +458,13 @@ impl ReplyRoutes {
                 publisher(PIECES).await?,
                 publisher(SPEECH).await?,
                 cancels,
+                server_cancel,
             ))
         });
         match started {
-            Ok((llm, pieces, speech, cancels)) => Ok(Self { rt, llm, pieces, speech, cancels, closed, model }),
+            Ok((llm, pieces, speech, cancels, server_cancel)) => {
+                Ok(Self { rt, llm, pieces, speech, cancels, server_cancel, closed, model })
+            }
             Err(e) => {
                 // SAFETY: no session was created, so nothing borrows the model.
                 model.into_iter().for_each(|m| drop(unsafe { Box::from_raw(m) }));
@@ -384,7 +478,7 @@ impl ReplyRoutes {
     }
 
     fn chat(kind: &str, turn: &str, messages: &[Message]) -> Result<CanonicalMessage> {
-        let body = serde_json::to_string(&Chat { messages: messages.to_vec() }).map_err(routes_error)?;
+        let body = serde_json::to_string(messages).map_err(routes_error)?;
         Ok(turn_message(kind, turn, &body))
     }
 
@@ -402,8 +496,8 @@ impl ReplyRoutes {
     /// Speaks a fixed text as the reply, through the same sentence split and gate.
     pub fn canned(&self, turn: &str, text: &str, held: bool) -> Result<()> {
         self.hold(turn, held)?;
-        self.send(&self.pieces, turn_message("piece", turn, text))?;
-        self.send(&self.pieces, turn_message("end", turn, ""))
+        self.send(&self.pieces, token(turn, 0, text, None))?;
+        self.send(&self.pieces, token(turn, 1, "", Some(COMPLETE)))
     }
 
     fn hold(&self, turn: &str, held: bool) -> Result<()> {
@@ -430,6 +524,12 @@ impl ReplyRoutes {
     /// Stops the turn in every stage: running work ends, waiting messages are skipped.
     pub fn cancel(&self, turn: &str) {
         self.cancels.iter().for_each(|c| c.cancel(turn));
+        if let Some(server) = &self.server_cancel {
+            let stop = CanonicalMessage::from(turn).with_metadata_kv(CORRELATION_ID, turn);
+            if let Err(e) = self.send(server, stop) {
+                eprintln!("llm_pal: {e}");
+            }
+        }
     }
 }
 

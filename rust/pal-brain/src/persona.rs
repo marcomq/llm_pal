@@ -6,9 +6,6 @@ use std::hash::{BuildHasher, RandomState};
 use crate::language::Language;
 use crate::llm::{Message, Role};
 
-/// Jokes per start: enough variety, few enough that a small model still follows the prompt.
-const JOKES_PER_START: usize = 10;
-
 /// Longer lines are about more than a quip's trigger and go to the model.
 const QUIP_MAX_WORDS: usize = 10;
 
@@ -28,7 +25,7 @@ pub struct Persona {
     name: String,
     /// Fixed sample turns after the system prompt; they show the tone better than a description.
     examples: &'static [(&'static str, &'static str)],
-    /// This start's jokes; asked for one, Pal tells the next of them instead of letting the model retell it.
+    /// All jokes in a random order; asked for one, Pal tells the next of them instead of letting the model retell it.
     jokes: Vec<&'static str>,
     next_joke: usize,
     joke_intros: &'static [&'static str],
@@ -46,12 +43,10 @@ pub struct Persona {
 impl Persona {
     pub fn kitt(language: Language, name: &str) -> Self {
         let p = language.profile();
-        let jokes = pick(p.jokes.lines(), JOKES_PER_START);
-        let list: String = jokes.iter().map(|j| format!("\n{j}")).collect();
         let (quips, pool) = parse_pool(p.pool);
         Self {
             examples: p.examples,
-            jokes,
+            jokes: shuffled(p.jokes.lines()),
             joke_intros: p.joke_intros,
             joke_words: p.joke_words,
             quips_given: (0..quips.len()).map(|i| RandomState::new().hash_one(i) as usize).collect(),
@@ -59,7 +54,7 @@ impl Persona {
             pool,
             filler: p.filler,
             name: name.to_string(),
-            ..Self::new(format!("{}\n{}{list}", p.system_prompt, p.joke_offer).replace(DEFAULT_NAME, name))
+            ..Self::new(p.system_prompt.replace(DEFAULT_NAME, name))
         }
     }
 
@@ -221,7 +216,7 @@ fn alike(a: &str, b: &str) -> bool {
 }
 
 /// `n` random items, in random order.
-fn pick<'a>(items: impl Iterator<Item = &'a str>, n: usize) -> Vec<&'a str> {
+fn shuffled<'a>(items: impl Iterator<Item = &'a str>) -> Vec<&'a str> {
     let mut items: Vec<_> = items.filter(|l| !l.trim().is_empty()).collect();
     let mut seed = RandomState::new().hash_one(0u8) | 1;
     for i in (1..items.len()).rev() {
@@ -230,7 +225,6 @@ fn pick<'a>(items: impl Iterator<Item = &'a str>, n: usize) -> Vec<&'a str> {
         seed ^= seed << 17;
         items.swap(i, (seed % (i as u64 + 1)) as usize);
     }
-    items.truncate(n);
     items
 }
 
@@ -253,11 +247,14 @@ mod tests {
     }
 
     #[test]
-    fn kitt_gets_ten_different_jokes() {
+    fn kitt_keeps_jokes_out_of_the_unchanging_prompt() {
         for language in Language::ALL {
-            let p = Persona::kitt(language, DEFAULT_NAME);
-            let jokes: Vec<_> = language.profile().jokes.lines().filter(|j| p.system.contains(j)).collect();
-            assert_eq!(jokes.len(), JOKES_PER_START, "{language:?}");
+            let (a, b) = (Persona::kitt(language, DEFAULT_NAME), Persona::kitt(language, DEFAULT_NAME));
+            assert_eq!(a.context().len(), a.fixed_messages(), "{language:?}");
+            assert_eq!(a.context()[0].content, b.context()[0].content, "{language:?}");
+            assert!(a.jokes.iter().all(|j| !a.system.contains(j)), "{language:?}");
+            let lines = language.profile().jokes.lines().filter(|l| !l.trim().is_empty()).count();
+            assert_eq!(a.jokes.len(), lines, "{language:?}");
         }
     }
 

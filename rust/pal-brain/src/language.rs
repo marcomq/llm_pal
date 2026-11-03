@@ -22,8 +22,6 @@ pub struct Profile {
     pub examples: &'static [(&'static str, &'static str)],
     /// One joke per line.
     pub jokes: &'static str,
-    /// Introduces the jokes in the system prompt.
-    pub joke_offer: &'static str,
     pub joke_intros: &'static [&'static str],
     /// Lowercase words that ask for a joke.
     pub joke_words: &'static [&'static str],

@@ -49,21 +49,27 @@ Everything runs in `converse` in `pal-brain/src/agent.rs`, a loop on the agent's
   `pal.llm` → `pal.pieces` → `pal.speech`, routes `pal_llm` (model), `pal_split` (sentence split, `sentences.rs`),
   `pal_speak` (gate and speaker). Each stage is a `ThreadedHandler` on its own thread. Every message carries its turn
   id; `interrupt`/`discard` cancel a turn in all stages. `canned` sends a fixed text through the same path.
+- **Tokens** on `pal.pieces` use mq-bridge's `stream_to` format for every source (server, local model, canned):
+  `correlation_id` = turn, `mqb.stream.index`, `mqb.stream.end`; the last token's `mqb.stream.status` is
+  `complete`, `error` (payload = error text) or `cancelled`.
 - **STT**: see step 4; an endpoint, not a route.
-- mq-bridge 1.3.0 (crates.io). Don't change mq-bridge itself. Ideas for later (deferred): `lookup` middleware for
+- mq-bridge 1.4.0 from the local checkout `../mq-bridge` (`[patch.crates-io]` in `rust/Cargo.toml`, also used by
+  mq-bridge-onnx). Don't change mq-bridge itself. Ideas for later (deferred): `lookup` middleware for
   enrichment, `switch`, embeddings + qdrant.
 
 ## LLM ("brain")
 
-- `routes::Brain`: `Local(LocalLlm)` or `Remote { server: RemoteLlm, fallback: Option<LocalLlm> }`, built in
+- `routes::Brain`: `Local(LocalLlm)` or `Remote { server: RemoteConfig, fallback: Option<LocalLlm> }`, built in
   `converse` from `AgentConfig.remote` and `AgentConfig.fallback`.
 - `llm.rs`: `LocalLlm` via llama.cpp (default model Qwen3.5 2B GGUF), trait `Llm`.
-- `remote.rs`: own blocking streaming client (ureq 3, rustls + webpki-roots, works on Android). Ollama and OpenAI
-  use the OpenAI chat format with SSE (`/chat/completions`); Anthropic uses `/messages` with `x-api-key` and
-  `anthropic-version`. The request runs on its own thread; `reply` polls cancel every 50 ms. Timeouts: connect 5 s,
-  response 30 s, per read 15 s, no overall timeout (streams may be long).
-- The local fallback runs only if the server failed before the first piece and the turn wasn't cancelled. Without
-  fallback the local model isn't loaded. A failed reply becomes `AgentEvent::ReplyFailed` → Godot `reply_failed`.
+- `remote.rs`: builds the mq-bridge endpoint: `openai_chat` with `messages_from_payload` for Ollama and OpenAI,
+  the streaming `http_bulk` recipe for Anthropic's `/messages`. Both stream to `pal.llm.tokens` (`stream_to`) and
+  stop on `pal.llm.cancel` (`cancel_from`, sent by `ReplyRoutes::cancel`). The model stage passes the tokens on to
+  `pal.pieces`. Timeout: 30 s per silence of the server, no overall timeout (streams may be long).
+- Android: reqwest's platform verifier is not initialised there, so `remote.rs` sets `tls.ca_file = "$.bundled"`
+  (mq-bridge's built-in Mozilla roots) for every server.
+- The local fallback runs only if the server's last token is `error` at index 0 (no text) and the turn wasn't
+  cancelled. Without fallback the local model isn't loaded. A failed reply becomes `AgentEvent::ReplyFailed` → Godot `reply_failed`.
 
 ## TTS
 
