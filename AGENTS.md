@@ -85,6 +85,7 @@ Pal says a quip or pool reply to one of its lines, or else the model comments on
 ## TTS
 
 `pal-brain/src/tts.rs` (`PocketSpeaker`): Pocket TTS in-process, one thread generates, one owns the playback.
+Weights are quantized to q8_0 at load (`pal-tts/src/lib.rs`, `type Backend`): 2.4× faster than f32 on the Mac.
 `numbers.rs` writes digits as words, `leveler.rs` evens out loudness, `voice_filter.rs` adds KITT's speaker sound.
 Voice per language from the settings (`Settings.VOICES`, default `juergen`); `push-models` copies the same list.
 

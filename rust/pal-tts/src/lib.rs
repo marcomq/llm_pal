@@ -21,7 +21,8 @@ use std::sync::atomic::AtomicBool;
 pub use anyhow::{Error, Result};
 pub use download::use_local_files;
 
-type Backend = xn::Unquantized<f32, xn::CpuDevice>;
+/// pal-tts change: q8_0 weights, faster on phones.
+type Backend = xn::quantized::Q80F32;
 
 pub struct PocketTts {
     model: model::TtsModel<Backend>,
