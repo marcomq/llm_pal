@@ -6,6 +6,7 @@
 #[cfg(target_os = "android")]
 mod android;
 pub mod capture;
+pub mod cpu;
 pub mod echo;
 pub mod event;
 pub mod mic_pipeline;

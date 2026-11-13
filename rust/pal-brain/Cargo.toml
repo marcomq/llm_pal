@@ -10,7 +10,8 @@ llama-cpp-2 = "0.1.160"
 thiserror = "2"
 hound = "3.5.1"
 pal-tts = { path = "../pal-tts" }
-mq-bridge = { version = "1.4.0", default-features = false, features = ["http-bulk"] }
+xn = "0.2.11"
+mq-bridge = { version = "1.5.0", default-features = false, features = ["http-bulk"] }
 mq-bridge-onnx = { version = "0.2.0", default-features = false, features = ["asr"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 serde = { version = "1", features = ["derive"] }

@@ -16,6 +16,7 @@ use pal_core::{Event, Processor, ProcessorConfig, Segment, SegmenterConfig};
 use crate::enrich;
 use crate::language::Language;
 use crate::llm::{LlmConfig, LocalLlm};
+use crate::party::Party;
 use crate::persona::Persona;
 use crate::prosody_tags::{self, ProsodyTags};
 use crate::remote::RemoteConfig;
@@ -45,6 +46,9 @@ pub struct AgentConfig {
     pub remote: Option<RemoteConfig>,
     /// With `remote`, the local model answers when the server fails.
     pub fallback: bool,
+    /// Party mode: Pal answers only when called by name or asked for a joke, and speaks up when the room's talk
+    /// stops.
+    pub party: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -66,8 +70,9 @@ pub enum AgentEvent {
     Heard(String),
     /// A sentence of the reply, as it is queued for speech.
     Said(String),
-    /// `first_sentence_ms` and `total_ms` count from the end of the segment; a reply prepared during a pause can
-    /// be ready at 0. `stt_ms` is the transcription time.
+    /// `first_sentence_ms` (until the first sound played) and `total_ms` (until the reply was queued) count from
+    /// the end of the segment; a reply prepared during a pause can be ready at 0. `stt_ms` is the transcription
+    /// time. Sent once the reply's first sound played, or when the next turn starts.
     TurnDone {
         reply: String,
         stt_ms: u128,
@@ -161,6 +166,33 @@ impl Drop for Agent {
 const LIVE_TIMEOUT: Duration = Duration::from_secs(5);
 /// Extra silence Pal waits for after a transcript that doesn't sound finished.
 const UNFINISHED_WAIT: Duration = Duration::from_millis(700);
+/// Quiet after a barge-in with no words heard, after which Pal's paused voice goes on. Longer than the segmenter's
+/// `end_silence_ms`, so a segment of real speech arrives first.
+const RESUME_AFTER: Duration = Duration::from_millis(1200);
+
+/// Pal's voice is paused for speech during output: words in it stop the reply, a cough or noise lets it go on.
+#[derive(Default)]
+struct Barge {
+    quiet_since: Option<Instant>,
+}
+
+impl Barge {
+    fn over(&mut self, hearing: bool) -> bool {
+        if hearing {
+            self.quiet_since = None;
+            return false;
+        }
+        self.quiet_since.get_or_insert_with(Instant::now).elapsed() >= RESUME_AFTER
+    }
+}
+
+fn resume_if_quiet(barge: &mut Option<Barge>, hearing: bool, speaker: &PocketSpeaker) {
+    if barge.as_mut().is_some_and(|b| b.over(hearing)) {
+        *barge = None;
+        speaker.resume();
+        eprintln!("llm_pal: no words after the barge-in, going on");
+    }
+}
 
 /// No closing punctuation, a trailing ellipsis or comma, or a last word such as "and".
 fn sounds_unfinished(text: &str, language: Language) -> bool {
@@ -183,10 +215,14 @@ struct Timing {
     turn: String,
     ended: Instant,
     marks: Vec<(&'static str, Option<Instant>)>,
+    reply: String,
+    stt_ms: u128,
+    total_ms: u128,
 }
 
 impl Timing {
-    fn log(&self, audio: Option<Instant>) {
+    /// Logs the milestones and reports the turn; `audio` is when its first sound played, if it did.
+    fn finish(self, audio: Option<Instant>, send: &dyn Fn(AgentEvent)) {
         let ms = |at: Instant| match at.checked_duration_since(self.ended) {
             Some(after) => after.as_millis() as i64,
             None => -(self.ended.duration_since(at).as_millis() as i64),
@@ -195,6 +231,12 @@ impl Timing {
             .map(|(name, at)| at.map_or(format!("{name} -"), |at| format!("{name} {}", ms(at))))
             .collect();
         eprintln!("llm_pal: {} ms after end of speech: {}", self.turn, parts.join(", "));
+        send(AgentEvent::TurnDone {
+            reply: self.reply,
+            stt_ms: self.stt_ms,
+            first_sentence_ms: audio.map(|at| at.saturating_duration_since(self.ended).as_millis()),
+            total_ms: self.total_ms,
+        });
     }
 }
 
@@ -217,6 +259,19 @@ fn prefilled(inbox: &Inbox) -> Result<()> {
 enum Input {
     Event(Event),
     Spoken(Spoken),
+}
+
+/// What a turn answers: speech up to a pause (`true`) or its end, or in party mode the room's talk before a
+/// silence with the model's prompt about it.
+enum Cue {
+    Speech(Segment, bool),
+    Silence { talk: Vec<String>, prompt: String },
+}
+
+enum Reply {
+    Canned(String),
+    /// The model answers this prompt line.
+    Model(String),
 }
 
 /// Microphone events and route reports in arrival order, with what was set aside for later.
@@ -339,7 +394,8 @@ fn converse(cfg: &AgentConfig, shared: &Shared, tx: &Sender<AgentEvent>) -> Resu
         }
     });
     let active = processor.output_active();
-    let _ = shared.hearing.set(processor.in_speech());
+    let in_speech = processor.in_speech();
+    let _ = shared.hearing.set(in_speech.clone());
     if !processor.wait_live(LIVE_TIMEOUT) {
         eprintln!("llm_pal: no sound from '{}' yet", processor.device_name());
     }
@@ -350,85 +406,157 @@ fn converse(cfg: &AgentConfig, shared: &Shared, tx: &Sender<AgentEvent>) -> Resu
     let mut carry = None::<Vec<f32>>;
     let mut turns = 0u64;
     let mut timing = None::<Timing>;
+    let mut party = cfg.party.then(|| Party::new(cfg.language));
+    let mut barge = None::<Barge>;
+    // The sentences of the last reply in the history, cut to what was heard if the user interrupts it.
+    let mut last_reply = None::<Vec<String>>;
     while !shared.quit.load(Ordering::SeqCst) {
-        if let Some(t) = &timing
+        if timing.is_some()
             && let Some(audio) = speaker.take_audio_start()
+            && let Some(t) = timing.take()
         {
-            t.log(Some(audio));
-            timing = None;
+            t.finish(Some(audio), &send);
         }
         let speaking = speaker.speaking();
         active.store(speaking, Ordering::Relaxed);
         shared.set(if speaking { State::Speaking } else { State::Listening });
         // Reports of earlier turns are stale here.
-        let Some(Input::Event(event)) = inbox.recv(Duration::from_millis(20), true) else { continue };
+        let input = inbox.recv(Duration::from_millis(20), true);
+        if input.is_none() {
+            resume_if_quiet(&mut barge, in_speech.load(Ordering::Relaxed), &speaker);
+        }
+        let quiet = match &mut party {
+            Some(party) if input.is_none() && !speaking && !in_speech.load(Ordering::Relaxed) => {
+                party.quiet().map(|talk| Cue::Silence { prompt: party.prompt(&talk), talk })
+            }
+            _ => None,
+        };
         // A reply to a pause is prepared but held back until the segment really ends.
-        let (seg, early) = match event {
-            Event::SpeechStart { .. } | Event::Resume => continue,
-            Event::BargeIn { .. } => {
-                if cfg.barge_in {
-                    speaker.stop();
-                    send(AgentEvent::Interrupted);
+        let mut cue = match (input, quiet) {
+            (_, Some(silence)) => silence,
+            (Some(Input::Event(event)), None) => match event {
+                Event::SpeechStart { .. } => {
+                    if let Some(party) = &mut party {
+                        party.speech();
+                    }
+                    continue;
+                }
+                Event::Resume => continue,
+                Event::BargeIn { .. } => {
+                    if cfg.barge_in {
+                        speaker.pause();
+                        barge = Some(Barge::default());
+                    }
+                    continue;
+                }
+                Event::Pause(seg) => Cue::Speech(seg, true),
+                Event::Segment(seg) => Cue::Speech(seg, false),
+            },
+            _ => continue,
+        };
+        if let Cue::Speech(seg, early) = &mut cue {
+            if let Some(before) = &carry {
+                seg.pcm = [before.as_slice(), &seg.pcm].concat();
+            }
+            // Without barge-in, speech that overlaps Pal's output is ignored: it may be Pal's own voice.
+            if seg.during_output && !cfg.barge_in {
+                if !*early {
+                    send(AgentEvent::Ignored);
                 }
                 continue;
             }
-            Event::Pause(seg) => (seg, true),
-            Event::Segment(seg) => (seg, false),
-        };
-        let mut seg = seg;
-        if let Some(before) = &carry {
-            seg.pcm = [before.as_slice(), &seg.pcm].concat();
-        }
-        // Without barge-in, speech that overlaps Pal's output is ignored: it may be Pal's own voice.
-        if seg.during_output && !cfg.barge_in {
-            if !early {
-                send(AgentEvent::Ignored);
-            }
-            continue;
         }
 
         shared.set(State::Thinking);
         let t0 = Instant::now();
         if let Some(t) = timing.take() {
-            t.log(None);
+            t.finish(None, &send);
         }
         speaker.take_audio_start();
         let tags_before = tags.clone();
-        let text = match stt.transcribe(&seg.pcm) {
-            Ok(text) => text,
-            Err(e) => {
-                eprintln!("llm_pal: {e}");
-                continue;
+        let (text, line, early, mut ended, stt_ms, text_at, reply) = match cue {
+            Cue::Silence { talk, prompt } => {
+                eprintln!("llm_pal: the room went quiet");
+                let canned = talk.iter().rev().find_map(|t| persona.quip(t).or_else(|| persona.pooled(t)));
+                let reply = canned.map_or_else(|| Reply::Model(prompt.clone()), Reply::Canned);
+                (talk.join(" "), prompt, false, Some(t0), 0, t0, reply)
+            }
+            Cue::Speech(seg, early) => {
+                let text = match stt.transcribe(&seg.pcm) {
+                    Ok(text) => text,
+                    Err(e) => {
+                        eprintln!("llm_pal: {e}");
+                        continue;
+                    }
+                };
+                let stt_ms = t0.elapsed().as_millis();
+                let text_at = Instant::now();
+                if let Some(dir) = &record_dir
+                    && let Err(e) = record(dir, &seg.pcm, &text)
+                {
+                    eprintln!("llm_pal: recording to {}: {e}", dir.display());
+                }
+                if text.is_empty() {
+                    if !early && barge.take().is_some() {
+                        speaker.resume();
+                    }
+                    continue;
+                }
+                if !early {
+                    if !seg.turn_complete && sounds_unfinished(&text, cfg.language) && inbox.goes_on() {
+                        carry = Some(seg.pcm);
+                        continue;
+                    }
+                    carry = None;
+                }
+                let line = Persona::user_line(&text, &prosody_tags::format(&tags.tag(&seg.features), cfg.language));
+                let joke = persona.joke(&text);
+                if let Some(party) = &mut party {
+                    if joke.is_none() && !party.called(&text) {
+                        if early {
+                            tags = tags_before;
+                        } else {
+                            send(AgentEvent::Heard(line));
+                            party.overhear(text);
+                            if barge.take().is_some() {
+                                speaker.resume();
+                            }
+                        }
+                        continue;
+                    }
+                    party.forget();
+                }
+                if barge.take().is_some() {
+                    let said = last_reply.take().unwrap_or_default();
+                    let heard = speaker.heard().min(said.len());
+                    if let Err(e) = routes.interrupt(&format!("turn-{turns}")) {
+                        eprintln!("llm_pal: {e}");
+                    }
+                    speaker.stop();
+                    if heard < said.len() {
+                        persona.cut_last_reply(said[..heard].join(" "));
+                    }
+                    send(AgentEvent::Interrupted);
+                }
+                if !early {
+                    send(AgentEvent::Heard(line.clone()));
+                }
+                let reply = match joke.or_else(|| persona.quip(&text)).or_else(|| persona.pooled(&text)) {
+                    Some(canned) => Reply::Canned(canned),
+                    None => Reply::Model(enrich::prompt_line(&text, &line, cfg.language)),
+                };
+                let ended = (!early).then(|| speech_end(t0, &seg));
+                (text, line, early, ended, stt_ms, text_at, reply)
             }
         };
-        let stt_ms = t0.elapsed().as_millis();
-        let text_at = Instant::now();
-        if let Some(dir) = &record_dir
-            && let Err(e) = record(dir, &seg.pcm, &text)
-        {
-            eprintln!("llm_pal: recording to {}: {e}", dir.display());
-        }
-        if text.is_empty() {
-            continue;
-        }
-        if !early {
-            if !seg.turn_complete && sounds_unfinished(&text, cfg.language) && inbox.goes_on() {
-                carry = Some(seg.pcm);
-                continue;
-            }
-            carry = None;
-        }
-        let line = Persona::user_line(&text, &prosody_tags::format(&tags.tag(&seg.features), cfg.language));
 
         turns += 1;
         let turn = format!("turn-{turns}");
-        if !early {
-            send(AgentEvent::Heard(line.clone()));
-        }
-        let canned = persona.joke(&text).or_else(|| persona.quip(&text)).or_else(|| persona.pooled(&text));
-        let started = match canned {
-            Some(canned) => routes.canned(&turn, &canned, early),
-            None => routes.reply(&turn, &persona.messages(&enrich::prompt_line(&text, &line, cfg.language)), early),
+        speaker.new_reply();
+        last_reply = None;
+        let started = match reply {
+            Reply::Canned(canned) => routes.canned(&turn, &canned, early),
+            Reply::Model(prompt) => routes.reply(&turn, &persona.messages(&prompt), early),
         };
         if let Err(e) = started {
             eprintln!("llm_pal: {e}");
@@ -437,19 +565,19 @@ fn converse(cfg: &AgentConfig, shared: &Shared, tx: &Sender<AgentEvent>) -> Resu
         }
         let sent_at = Instant::now();
 
-        let mut ended = (!early).then(|| speech_end(t0, &seg));
         let mut held = early;
         let mut spoken = Vec::new();
-        let mut first_sentence_ms = None;
         let (mut first_piece, mut first_sentence) = (None, None);
         let mut finished = false;
         while !shared.quit.load(Ordering::SeqCst) {
             // A held reply settles on the segment's end (speak it) or the user going on (drop it); other events
             // wait until the turn is over.
-            let Some(input) = inbox.recv(Duration::from_millis(20), held) else { continue };
+            let Some(input) = inbox.recv(Duration::from_millis(20), held) else {
+                resume_if_quiet(&mut barge, in_speech.load(Ordering::Relaxed), &speaker);
+                continue;
+            };
             match input {
                 Input::Spoken(Spoken::Said { turn: of, text: said, at }) if of == turn => {
-                    first_sentence_ms.get_or_insert(ended.map_or(0, |e| at.saturating_duration_since(e).as_millis()));
                     first_sentence.get_or_insert(at);
                     active.store(true, Ordering::Relaxed);
                     shared.set(State::Speaking);
@@ -470,11 +598,13 @@ fn converse(cfg: &AgentConfig, shared: &Shared, tx: &Sender<AgentEvent>) -> Resu
                 }
                 Input::Spoken(_) => {}
                 Input::Event(Event::BargeIn { .. }) if !held && cfg.barge_in => {
-                    if let Err(e) = routes.interrupt(&turn) {
-                        eprintln!("llm_pal: {e}");
-                    }
-                    speaker.stop();
-                    send(AgentEvent::Interrupted);
+                    speaker.pause();
+                    barge = Some(Barge::default());
+                }
+                // Speech after a barge-in ends the reply; whether its paused voice goes on depends on the words.
+                Input::Event(event @ (Event::Pause(_) | Event::Segment(_))) if !held && barge.is_some() => {
+                    routes.cancel(&turn);
+                    inbox.events.push_back(event);
                     finished = true;
                     break;
                 }
@@ -514,15 +644,13 @@ fn converse(cfg: &AgentConfig, shared: &Shared, tx: &Sender<AgentEvent>) -> Resu
                 ("first token", first_piece),
                 ("first sentence", first_sentence),
             ],
-        });
-        let reply = spoken.join(" ");
-        send(AgentEvent::TurnDone {
-            reply: reply.clone(),
+            reply: spoken.join(" "),
             stt_ms,
-            first_sentence_ms,
             total_ms: ended.unwrap_or(t0).elapsed().as_millis(),
         });
-        persona.remember(line, reply);
+        if persona.remember(line, spoken.join(" ")) {
+            last_reply = Some(spoken);
+        }
         if let Err(e) = routes.prefill(&persona.context()) {
             eprintln!("llm_pal: {e}");
         }

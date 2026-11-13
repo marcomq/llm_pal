@@ -80,7 +80,7 @@ impl LocalLlm {
         backend.void_logs();
         let path = model.to_path_buf();
         let model = LlamaModel::load_from_file(&backend, model, &LlamaModelParams::default()).map_err(err)?;
-        let threads = std::thread::available_parallelism().map_or(4, |n| n.get().min(4)) as i32;
+        let threads = pal_core::cpu::fast_cores() as i32;
         let vocab = model.vocab();
         let banned = (0..model.n_vocab())
             .map(LlamaToken)
@@ -88,6 +88,20 @@ impl LocalLlm {
             .map(|t| LlamaLogitBias::new(t, f32::NEG_INFINITY))
             .collect();
         Ok(Self { model, backend, cfg, threads, banned, path })
+    }
+}
+
+/// Niceness of the model's threads: speech output and the microphone get the cores first.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+const BACKGROUND_NICE: i32 = 10;
+
+/// Lowers the calling thread's priority, and that of the threads it starts later (llama.cpp's workers inherit it).
+/// Linux and Android only.
+pub fn run_in_background() {
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    // SAFETY: changes only the calling thread's niceness.
+    unsafe {
+        libc::setpriority(libc::PRIO_PROCESS as _, libc::gettid() as _, BACKGROUND_NICE);
     }
 }
 

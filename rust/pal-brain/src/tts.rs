@@ -18,7 +18,7 @@ use crate::{Error, Result};
 enum Audio {
     Chunk(u64, Vec<f32>),
     /// All of a sentence is queued; it counts as pending until then.
-    End,
+    End(u64),
 }
 
 /// Clones share one queue and playback, so one clone can speak while another stops it.
@@ -29,13 +29,15 @@ pub struct PocketSpeaker {
     pending: Arc<AtomicUsize>,
     cut: Arc<AtomicBool>,
     output: Arc<PlaybackState>,
-    audio_start: Arc<Mutex<Option<Instant>>>,
+    /// Playback position of each sentence of the current reply.
+    starts: Arc<Mutex<Vec<u64>>>,
 }
 
 impl PocketSpeaker {
     /// `voice` is a Pocket TTS catalog name such as "juergen". Blocks until the model is loaded; the first start
     /// downloads it from Hugging Face.
     pub fn new(voice: &str, language: Language) -> Result<Self> {
+        xn::set_num_threads(pal_core::cpu::fast_cores());
         let tts = PocketTts::load(language.profile().pocket_model, voice)
             .map_err(|e| Error::Tts(format!("pocket tts: {e:#}")))?;
         let rate = tts.sample_rate();
@@ -44,28 +46,38 @@ impl PocketSpeaker {
         let generation = Arc::new(AtomicU64::new(0));
         let pending = Arc::new(AtomicUsize::new(0));
         let cut = Arc::new(AtomicBool::new(false));
-        let audio_start = Arc::new(Mutex::new(None));
+        let starts = Arc::new(Mutex::new(Vec::new()));
 
         let (audio_tx, audio_rx) = channel::<Audio>();
         let (ready_tx, ready_rx) = sync_channel(1);
-        let (g, p, started) = (generation.clone(), pending.clone(), audio_start.clone());
+        let (g, p, started) = (generation.clone(), pending.clone(), starts.clone());
         std::thread::spawn(move || {
             let mut playback = match Playback::start() {
                 Ok(pb) => pb,
                 Err(e) => return drop(ready_tx.send(Err(Error::Tts(e.to_string())))),
             };
             let _ = ready_tx.send(Ok(playback.state.clone()));
+            let mut fresh = true;
+            let state = playback.state.clone();
+            let start_here = |gen_of_text: u64, fresh: &mut bool| {
+                if std::mem::take(fresh)
+                    && gen_of_text == g.load(Ordering::SeqCst)
+                    && let Ok(mut starts) = started.lock()
+                {
+                    starts.push(state.written());
+                }
+            };
             for audio in audio_rx {
                 match audio {
                     Audio::Chunk(gen_of_pcm, pcm) => {
                         if gen_of_pcm == g.load(Ordering::SeqCst) {
-                            if let Ok(mut at) = started.lock() {
-                                at.get_or_insert_with(Instant::now);
-                            }
+                            start_here(gen_of_pcm, &mut fresh);
                             playback.play(&pcm, rate);
                         }
                     }
-                    Audio::End => {
+                    Audio::End(gen_of_text) => {
+                        start_here(gen_of_text, &mut fresh);
+                        fresh = true;
                         p.fetch_sub(1, Ordering::SeqCst);
                         playback.drain();
                     }
@@ -90,10 +102,10 @@ impl PocketSpeaker {
                         eprintln!("llm_pal: pocket tts: {e:#}");
                     }
                 }
-                let _ = audio_tx.send(Audio::End);
+                let _ = audio_tx.send(Audio::End(gen_of_text));
             }
         });
-        Ok(Self { tx, generation, pending, cut, output, audio_start })
+        Ok(Self { tx, generation, pending, cut, output, starts })
     }
 
     pub fn output(&self) -> Arc<PlaybackState> {
@@ -127,9 +139,31 @@ impl PocketSpeaker {
         self.output.stop();
     }
 
-    /// When the first audio since the previous call went to playback.
+    /// Holds the speech, e.g. while it is unclear whether the user interrupts.
+    pub fn pause(&self) {
+        self.output.pause();
+    }
+
+    pub fn resume(&self) {
+        self.output.resume();
+    }
+
+    /// When the first sound since the previous call was played.
     pub fn take_audio_start(&self) -> Option<Instant> {
-        self.audio_start.lock().ok()?.take()
+        self.output.take_start()
+    }
+
+    /// The next sentences belong to a new reply, for `heard`.
+    pub fn new_reply(&self) {
+        if let Ok(mut starts) = self.starts.lock() {
+            starts.clear();
+        }
+    }
+
+    /// How many sentences of the current reply have begun to play, the last one maybe only partly.
+    pub fn heard(&self) -> usize {
+        let taken = self.output.taken();
+        self.starts.lock().map_or(0, |starts| starts.iter().filter(|&&at| taken > at).count())
     }
 
     pub fn speaking(&self) -> bool {

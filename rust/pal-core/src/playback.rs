@@ -1,8 +1,8 @@
 //! Speech output through cpal: a lock-free ring feeds the callback, which also measures the output level.
 
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{BufferSize, Stream, StreamConfig};
@@ -25,6 +25,13 @@ pub struct PlaybackState {
     generation: AtomicU64,
     /// Nothing more follows for now: play what is queued even if it is shorter than the pre-roll.
     draining: AtomicBool,
+    /// Holds the queue and plays silence until `resume`.
+    paused: AtomicBool,
+    /// Samples ever queued, and ever taken from the queue (played or dropped): positions in one stream.
+    written: AtomicU64,
+    taken: AtomicU64,
+    /// When sound last started after silence, in ns since `epoch()`; 0 once taken.
+    started_ns: AtomicU64,
     echo_reference: Mutex<Option<EchoReference>>,
 }
 
@@ -47,7 +54,37 @@ impl PlaybackState {
     pub fn stop(&self) {
         self.generation.fetch_add(1, Ordering::SeqCst);
         self.flush.store(true, Ordering::SeqCst);
+        self.paused.store(false, Ordering::SeqCst);
     }
+
+    pub fn pause(&self) {
+        self.paused.store(true, Ordering::SeqCst);
+    }
+
+    pub fn resume(&self) {
+        self.paused.store(false, Ordering::SeqCst);
+    }
+
+    pub fn written(&self) -> u64 {
+        self.written.load(Ordering::SeqCst)
+    }
+
+    /// Samples taken from the queue so far; a sample queued at position `p` was played (or dropped) once this is
+    /// above `p`.
+    pub fn taken(&self) -> u64 {
+        self.taken.load(Ordering::SeqCst)
+    }
+
+    /// When sound started after silence, the first time since the previous call.
+    pub fn take_start(&self) -> Option<Instant> {
+        let ns = self.started_ns.swap(0, Ordering::SeqCst);
+        (ns > 0).then(|| epoch() + Duration::from_nanos(ns))
+    }
+}
+
+fn epoch() -> Instant {
+    static EPOCH: OnceLock<Instant> = OnceLock::new();
+    *EPOCH.get_or_init(Instant::now)
 }
 
 /// Owns the output stream; keep it on the thread that created it.
@@ -80,6 +117,7 @@ impl Playback {
         let mut primed = false;
         let fade = (sample_rate * FADE_MS / 1000).max(1) as f32;
         let mut envelope = 0.0f32;
+        epoch();
         let stream = dev
             .build_output_stream(
                 config,
@@ -88,18 +126,29 @@ impl Playback {
                         let n = rx.slots();
                         if let Ok(chunk) = rx.read_chunk(n) {
                             chunk.commit_all();
+                            st.taken.fetch_add(n as u64, Ordering::SeqCst);
                         }
                     }
                     let queued = rx.slots();
                     let draining = st.draining.load(Ordering::Relaxed);
-                    primed = queued > 0 && (primed || queued >= preroll || draining);
+                    let paused = st.paused.load(Ordering::Relaxed);
+                    let was_primed = primed;
+                    primed = !paused && queued > 0 && (primed || queued >= preroll || draining);
+                    if primed && !was_primed {
+                        let ns = (epoch().elapsed().as_nanos() as u64).max(1);
+                        let _ = st.started_ns.compare_exchange(0, ns, Ordering::SeqCst, Ordering::SeqCst);
+                    }
+                    let mut popped = 0u64;
                     let mut sum = 0.0;
                     for frame in out.chunks_mut(channels) {
                         let mut s = 0.0;
                         if primed {
                             let left = if draining { f32::INFINITY } else { rx.slots() as f32 };
                             envelope = (envelope + 1.0 / fade).min(left / fade).min(1.0);
-                            s = rx.pop().unwrap_or(0.0) * envelope;
+                            if let Ok(sample) = rx.pop() {
+                                popped += 1;
+                                s = sample * envelope;
+                            }
                         } else {
                             envelope = 0.0;
                         }
@@ -108,6 +157,7 @@ impl Playback {
                         // Full while no echo canceller reads it; it drops its stale start.
                         let _ = played.push(s);
                     }
+                    st.taken.fetch_add(popped, Ordering::SeqCst);
                     let rms = (sum / (out.len() / channels).max(1) as f32).sqrt();
                     st.level.store(rms.to_bits(), Ordering::Relaxed);
                     st.queued.store(rx.slots(), Ordering::Relaxed);
@@ -145,6 +195,7 @@ impl Playback {
                 unsafe { chunk.commit_all() };
             }
             self.state.queued.fetch_add(n, Ordering::Relaxed);
+            self.state.written.fetch_add(n as u64, Ordering::SeqCst);
             rest = &rest[n..];
         }
         true

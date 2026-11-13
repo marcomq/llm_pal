@@ -96,6 +96,10 @@ pub struct PalNode {
     /// The local model answers when the server fails; it is loaded only then.
     #[export]
     llm_fallback: bool,
+    /// Pal answers only when called by name or asked for a joke, and speaks up when the room goes quiet; takes
+    /// effect on `start`.
+    #[export]
+    party_mode: bool,
     base: Base<Node>,
 }
 
@@ -118,6 +122,7 @@ impl INode for PalNode {
             llm_remote_model: GString::new(),
             llm_api_key: GString::new(),
             llm_fallback: false,
+            party_mode: false,
             base,
         }
     }
@@ -230,6 +235,7 @@ impl PalNode {
             user_name: if user_name.trim().is_empty() { pal_brain::persona::DEFAULT_NAME.into() } else { user_name },
             remote,
             fallback: self.llm_fallback,
+            party: self.party_mode,
         }));
     }
 

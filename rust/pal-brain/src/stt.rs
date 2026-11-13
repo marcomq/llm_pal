@@ -29,7 +29,7 @@ impl Recognizer {
         static REGISTERED: OnceLock<std::result::Result<(), String>> = OnceLock::new();
         REGISTERED.get_or_init(|| mq_bridge_onnx::register().map_err(|e| format!("{e:#}"))).clone().map_err(err)?;
         pal_core::vad::use_environment(mq_bridge_onnx::environment().map_err(err)?.clone());
-        let threads = std::thread::available_parallelism().map_or(4, |n| n.get().min(4));
+        let threads = pal_core::cpu::fast_cores();
         let path = model.to_str().ok_or_else(|| err("model path is not UTF-8"))?;
         let endpoint = serde_json::json!({ "custom": { "name": mq_bridge_onnx::NAME, "config": {
             "task": "transcribe", "model": path, "threads": threads,

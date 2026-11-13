@@ -25,6 +25,10 @@ pub struct Profile {
     pub joke_intros: &'static [&'static str],
     /// Lowercase words that ask for a joke.
     pub joke_words: &'static [&'static str],
+    /// Lowercase words that call Pal in party mode: his name as speech recognition writes it.
+    pub call_words: &'static [&'static str],
+    /// Party mode's prompt when the room goes quiet; `{talk}` is the quoted talk before.
+    pub silence_prompt: &'static str,
     /// Fixed replies, one per line: `= trigger; trigger | reply | reply` for short lines, `line | reply` for sample
     /// turns. `#` starts a comment line.
     pub pool: &'static str,

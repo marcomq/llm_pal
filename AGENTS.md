@@ -43,6 +43,15 @@ Everything runs in `converse` in `pal-brain/src/agent.rs`, a loop on the agent's
 11. **After the turn**: `persona.remember(line, reply)`, then `routes.prefill(persona.context())` warms the LLM cache
     for the next turn.
 
+**Barge-in** (`AgentConfig.barge_in`): `BargeIn` only pauses Pal's voice (`PocketSpeaker::pause`). A running reply
+is cancelled once the speech yields a `Pause` or `Segment`. Words in its transcript stop the voice and cut the last
+reply in the history to the sentences that began to play (`PocketSpeaker::heard`, `Persona::cut_last_reply`). No
+words, or room talk in party mode, or `RESUME_AFTER` of quiet without a segment: the voice goes on.
+
+**Party mode** (`AgentConfig.party`, `pal-brain/src/party.rs`): after step 6 a line that neither calls Pal
+(`call_words`, e.g. "KITT") nor asks for a joke is only kept as room talk. After 5 s of silence following such talk,
+Pal says a quip or pool reply to one of its lines, or else the model comments on it (`silence_prompt`); once per talk.
+
 ## mq-bridge
 
 - **Reply routes** (`pal-brain/src/routes.rs`, `ReplyRoutes`): in-process `memory` endpoints
@@ -53,7 +62,7 @@ Everything runs in `converse` in `pal-brain/src/agent.rs`, a loop on the agent's
   `correlation_id` = turn, `mqb.stream.index`, `mqb.stream.end`; the last token's `mqb.stream.status` is
   `complete`, `error` (payload = error text) or `cancelled`.
 - **STT**: see step 4; an endpoint, not a route.
-- mq-bridge 1.4.0 from the local checkout `../mq-bridge` (`[patch.crates-io]` in `rust/Cargo.toml`, also used by
+- mq-bridge 1.5.0 from the local checkout `../mq-bridge` (`[patch.crates-io]` in `rust/Cargo.toml`, also used by
   mq-bridge-onnx). Don't change mq-bridge itself. Ideas for later (deferred): `lookup` middleware for
   enrichment, `switch`, embeddings + qdrant.
 
@@ -61,7 +70,9 @@ Everything runs in `converse` in `pal-brain/src/agent.rs`, a loop on the agent's
 
 - `routes::Brain`: `Local(LocalLlm)` or `Remote { server: RemoteConfig, fallback: Option<LocalLlm> }`, built in
   `converse` from `AgentConfig.remote` and `AgentConfig.fallback`.
-- `llm.rs`: `LocalLlm` via llama.cpp (default model Qwen3.5 2B GGUF), trait `Llm`.
+- `llm.rs`: `LocalLlm` via llama.cpp (default model Qwen3.5 2B GGUF), trait `Llm`. The model stage's thread runs
+  at nice 10 (`run_in_background`, Linux/Android); llama.cpp's workers inherit it, so TTS and audio come first.
+- Thread counts for llama.cpp, Pocket TTS (xn), Parakeet and Smart Turn: `pal_core::cpu::fast_cores()`.
 - `remote.rs`: builds the mq-bridge endpoint: `openai_chat` with `messages_from_payload` for Ollama and OpenAI,
   the streaming `http_bulk` recipe for Anthropic's `/messages`. Both stream to `pal.llm.tokens` (`stream_to`) and
   stop on `pal.llm.cancel` (`cancel_from`, sent by `ReplyRoutes::cancel`). The model stage passes the tokens on to
@@ -80,10 +91,11 @@ Voice per language from the settings (`Settings.VOICES`, default `juergen`); `pu
 ## Godot
 
 - `PalNode` (`pal-godot/src/lib.rs`): vars `user_name`, `llm_provider` (`local`/`ollama`/`openai`/`anthropic`),
-  `llm_url`, `llm_remote_model`, `llm_api_key`, `llm_fallback`, `smart_turn`, `barge_in`. Signals:
+  `llm_url`, `llm_remote_model`, `llm_api_key`, `llm_fallback`, `smart_turn`, `barge_in`, `party_mode`. Signals:
   `ready_to_listen`, `heard`, `said`, `turn_done`, `interrupted`, `ignored`, `failed`, `reply_failed`.
-- `main.gd`: `_start()` copies settings onto `PalNode`. The "…" label or key S opens the settings form.
-- `settings.gd` (`Settings`): saves to `user://settings.cfg` (sections `user`, `voice`, `llm`); saving restarts Pal. An empty
+- `main.gd`: `_start()` copies settings onto `PalNode`. The "…" label or key S opens the settings form; the P0/P1
+  label or key P switches party mode (`user/party`).
+- `settings.gd` (`Settings`): saves to `user://settings.cfg` (sections `user` incl. `party`, `voice`, `llm`); saving restarts Pal. An empty
   URL means the provider default (in `settings.gd` and `remote.rs`). An empty model is replaced by the provider's
   model default from `settings.gd` only; `remote.rs` has no model default and sends the model as given.
 - Environment: `PAL_MODELS` (models folder), `PAL_LLM` (GGUF file), `PAL_SMART_TURN=0`, `PAL_BARGE_IN=0`,
@@ -92,8 +104,9 @@ Voice per language from the settings (`Settings.VOICES`, default `juergen`); `pu
 ## Build, test, device
 
 - `./build.sh setup | test | godot | android | install | push-models` (see `README.md`).
-- Unit tests: `cargo test -p pal-brain --lib`, `cargo test -p pal-core --lib`. Tests needing models or a speaker are
-  `#[ignore]`d (`reply_routes` speaks through the speakers and is timing-sensitive).
+- Everything builds in release (one build cache with `build.sh`): `cargo check --release`, unit tests
+  `cargo test --release -p pal-brain --lib`, `cargo test --release -p pal-core --lib`. Tests needing models or a
+  speaker are `#[ignore]`d (`reply_routes` speaks through the speakers and is timing-sensitive).
 - Android test phone: Pixel 6a over adb WLAN, `192.168.20.43:5555`. The phone must be unlocked for start checks.
 - Format with `cargo fmt -p pal-core -p pal-brain -p pal-godot`. A plain `cargo fmt` also reformats `pal-tts`.
 

@@ -38,6 +38,9 @@ Wiederhole ihn nie und schreibe selbst nie eckige Klammern.",
     jokes: include_str!("jokes_de.txt"),
     joke_intros: &["Gern, Michael.", "Aber natürlich, Michael.", "Einer geht noch, Michael.", "Pass auf, Michael."],
     joke_words: &["witz", "witze"],
+    call_words: &["kitt", "kit"],
+    silence_prompt: "Zuletzt im Raum gesagt: {talk} \
+Gib einen kurzen, witzigen Kommentar genau zu dem Gesagten ab.",
     pool: include_str!("pool_de.txt"),
     filler: &[
         "michael", "kitt", "habe", "hast", "haben", "bist", "sind", "wird", "werden", "heute", "gerade", "jetzt",

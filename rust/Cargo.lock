@@ -2155,7 +2155,7 @@ checksum = "1fafa6961cabd9c63bcd77a45d7e3b7f3b552b70417831fb0f56db717e72407e"
 
 [[package]]
 name = "mq-bridge"
-version = "1.4.0"
+version = "1.5.0"
 dependencies = [
  "anyhow",
  "async-channel",
@@ -2597,6 +2597,7 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.21",
  "tokio",
+ "xn",
 ]
 
 [[package]]

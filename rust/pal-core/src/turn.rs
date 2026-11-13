@@ -40,7 +40,7 @@ impl SmartTurn {
             .with_optimization_level(GraphOptimizationLevel::All)
             .map_err(|e| err(&e))?
             // About 40 ms per call on 4 threads, 70 ms on one; idle threads must not spin while the LLM runs.
-            .with_intra_threads(4)
+            .with_intra_threads(crate::cpu::fast_cores())
             .map_err(|e| err(&e))?
             .with_intra_op_spinning(false)
             .map_err(|e| err(&e))?

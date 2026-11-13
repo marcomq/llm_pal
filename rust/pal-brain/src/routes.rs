@@ -260,6 +260,7 @@ fn llm_stage(
     closed: Sender<()>,
 ) -> impl BlockingHandler {
     move |msg: CanonicalMessage, ctx: &HandlerContext| {
+        crate::llm::run_in_background();
         let kind = meta(&msg, KIND);
         if kind == "close" {
             SESSION.take();

@@ -6,6 +6,7 @@ pub mod language;
 pub mod leveler;
 pub mod llm;
 pub mod numbers;
+pub mod party;
 pub mod persona;
 pub mod prosody_tags;
 pub mod remote;

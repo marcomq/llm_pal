@@ -1,6 +1,7 @@
 extends Control
 ## Pal's display: KITT's voice box or HAL's eye, reacting only to Pal's own voice. Space or a tap on the KITT/HAL
 ## label top left switches; L or a tap on the DE/EN label top right switches the language and restarts Pal.
+## P or a tap on P0/P1 next to it switches party mode (Pal answers only "KITT", jokes and silence) and restarts Pal.
 ## A tap on … (or S) opens the settings; saving them restarts Pal.
 
 const SETTINGS_PATH := "user://settings.cfg"
@@ -30,10 +31,12 @@ const TEXTS := {
 @onready var language: Label = $Language
 @onready var display: Label = $Display
 @onready var menu: Label = $Menu
+@onready var party: Label = $Party
 
 var _cfg := ConfigFile.new()
 var _settings: Settings
 var _hal := false
+var _party := false
 var _lang := "de"
 var _level := 0.0
 var _phase := 0.0
@@ -50,6 +53,8 @@ func _ready() -> void:
 	_hal = _cfg.get_value("display", "hal", false)
 	_lang = _cfg.get_value("display", "language", "de")
 	language.text = _lang.to_upper()
+	_party = _cfg.get_value("user", "party", false)
+	_show_party()
 	_apply_mode()
 	pal.failed.connect(func(msg: String) -> void: _error = msg)
 	pal.reply_failed.connect(func(msg: String) -> void: _error = msg)
@@ -99,6 +104,7 @@ func _start() -> void:
 	pal.smart_turn = OS.get_environment("PAL_SMART_TURN") != "0"
 	pal.barge_in = OS.get_environment("PAL_BARGE_IN") != "0"
 	pal.user_name = Settings.user_name(_cfg)
+	pal.party_mode = _party
 	pal.pocket_voice = Settings.voice(_cfg, _lang)
 	pal.llm_provider = Settings.provider(_cfg)
 	pal.llm_url = Settings.url(_cfg)
@@ -136,9 +142,10 @@ func _process(delta: float) -> void:
 		mat.set_shader_parameter("level", _level)
 		mat.set_shader_parameter("glow", pulse)
 	else:
-		var breath := _think * (0.35 + 0.25 * sin(_phase * 0.8))
-		_center = _bulbs(_center, maxf(_level, breath) * CENTER_ROWS, delta)
-		_side = _bulbs(_side, maxf(_level * 0.8, breath * 0.6) * SIDE_ROWS, delta)
+		# Thinking and loading light only the middle segment, softly pulsing.
+		var bar := _think * (0.7 + 0.3 * sin(_phase * 0.8))
+		_center = _bulbs(_center, maxf(_level * CENTER_ROWS, bar), delta)
+		_side = _bulbs(_side, _level * 0.8 * SIDE_ROWS, delta)
 		mat.set_shader_parameter("center", _center)
 		mat.set_shader_parameter("side", _side)
 		mat.set_shader_parameter("time_s", Time.get_ticks_msec() / 1000.0)
@@ -180,6 +187,12 @@ func _input(event: InputEvent) -> void:
 		_switch_language()
 	elif (pressed_key and key.keycode == KEY_S) or (tapped and menu.get_global_rect().has_point(click.position)):
 		_open_settings()
+	elif (pressed_key and key.keycode == KEY_P) or (tapped and party.get_global_rect().has_point(click.position)):
+		_party = not _party
+		_show_party()
+		_cfg.set_value("user", "party", _party)
+		_cfg.save(SETTINGS_PATH)
+		_restart()
 	elif (pressed_key and key.keycode == KEY_SPACE) or (tapped and display.get_global_rect().has_point(click.position)):
 		_hal = not _hal
 		_apply_mode()
@@ -209,6 +222,10 @@ func _restart() -> void:
 		return
 	pal.stop()
 	_start()
+
+
+func _show_party() -> void:
+	party.text = "P1" if _party else "P0"
 
 
 func _apply_mode() -> void:

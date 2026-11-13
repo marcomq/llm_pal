@@ -171,13 +171,24 @@ impl Persona {
     }
 
     /// A reply that is already in the history is not kept again, so a small model doesn't settle into repeating it.
-    pub fn remember(&mut self, user_line: String, reply: String) {
+    /// False if the turn was not kept.
+    pub fn remember(&mut self, user_line: String, reply: String) -> bool {
         if reply.is_empty() || self.history.iter().any(|(_, a)| *a == reply) {
-            return;
+            return false;
         }
         self.history.push_back((user_line, reply));
         while self.history.len() > self.max_turns {
             self.history.pop_front();
+        }
+        true
+    }
+
+    /// The last reply was cut off: keep only what the user heard of it, or drop the turn if nothing.
+    pub fn cut_last_reply(&mut self, heard: String) {
+        if heard.is_empty() {
+            self.history.pop_back();
+        } else if let Some((_, reply)) = self.history.back_mut() {
+            *reply = heard;
         }
     }
 }
@@ -330,5 +341,17 @@ mod tests {
         p.remember("u0".into(), "Sorry.".into());
         p.remember("u1".into(), "Sorry.".into());
         assert_eq!(p.messages("u2").len(), 4, "sys, u0, reply, u2");
+    }
+
+    #[test]
+    fn a_cut_reply_keeps_only_what_was_heard() {
+        let mut p = Persona::new("sys");
+        assert!(p.remember("u0".into(), "One. Two.".into()));
+        assert!(p.remember("u1".into(), "Three. Four.".into()));
+        p.cut_last_reply("Three.".into());
+        let text: Vec<_> = p.context().iter().map(|m| m.content.clone()).collect();
+        assert_eq!(text, ["sys", "u0", "One. Two.", "u1", "Three."]);
+        p.cut_last_reply(String::new());
+        assert_eq!(p.context().len(), 3, "sys, u0, reply");
     }
 }

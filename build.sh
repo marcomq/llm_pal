@@ -28,7 +28,9 @@ build_android() {
     (cd rust && cargo ndk -t arm64-v8a --platform 26 build --release -p pal-godot)
     mkdir -p godot/bin/android build
     out=rust/target/aarch64-linux-android/release
-    cp "$out/libpal_godot.so" godot/bin/android/
+    # The unstripped library stays in $out, for ndk-stack.
+    strip=$(ls "$NDK"/toolchains/llvm/prebuilt/*/bin/llvm-strip | head -n 1)
+    "$strip" --strip-debug -o godot/bin/android/libpal_godot.so "$out/libpal_godot.so"
     (cd godot && "$GODOT" --headless --import && "$GODOT" --headless --export-debug Android)
 }
 
@@ -78,7 +80,7 @@ push_pocket() {
 
 case "${1:-}" in
     setup) sh scripts/fetch-models.sh && sh scripts/make-test-audio.sh ;;
-    test) (cd rust && cargo test --workspace -- --include-ignored --skip speaker) ;;
+    test) (cd rust && cargo test --release --workspace -- --include-ignored --skip speaker) ;;
     godot) run_godot ;;
     android) build_android ;;
     install) build_android && adb install -r "$APK" ;;
