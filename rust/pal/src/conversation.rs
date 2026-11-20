@@ -1,16 +1,12 @@
 //! The control center: Pal's main loop, the handler of the route `pal_conversation`. Everything Pal does starts here.
 //!
-//! ```text
-//! godot.rs PalNode::start
-//!   └─ Agent::start                 spawns the agent's thread, returns at once; there `run`:
-//!        ├─ load                    downloads, then speech recognition, voice and LLM side by side, prefill
-//!        ├─ transport::deploy       connects it all, the conversation as handler of [pal.inbox] (transport.rs)
-//!        └─ waits until `handle` fails or sees `stop`, then stops the routes
+//! `run` loads the parts on the agent's thread; how they are connected is drawn in `transport.rs`.
 //!
+//! ```text
 //!   Phase        input                    →
-//!   Prefilling   Prefilled                  Listening, microphone live → AgentEvent::Ready
+//!   Prefilling   Prefilled, then mic live   Listening → AgentEvent::Ready (at the latest after LIVE_TIMEOUT)
 //!   Listening    speech (cue → turn)        Replying, or Unfinished                conversation/turn.rs
-//!   Unfinished   speech starts again        Listening, the audio kept in `carry`   conversation/unfinished.rs
+//!   Unfinished   speech starts or goes on   Listening, the audio kept in `carry`   conversation/unfinished.rs
 //!                UNFINISHED_WAIT passed     answered → Replying                    conversation/answer.rs
 //!   Replying     reports, held reply, …     Replying until done                    conversation/follow.rs
 //!                Done                       Listening
@@ -370,7 +366,7 @@ impl Conversation {
             mic,
             persona,
             tags: ProsodyTags::default(),
-            phase: Phase::Prefilling { since: loading_since },
+            phase: Phase::Prefilling { since: loading_since, live_by: None },
             pending: None,
             carry: None,
             turns: 0,
@@ -412,13 +408,20 @@ impl Conversation {
             _ => {}
         }
         self.phase = match (std::mem::replace(&mut self.phase, Phase::Listening), input) {
-            (Phase::Prefilling { since }, Some(Input::Spoken(Spoken::Prefilled))) => self.ready(since),
+            (Phase::Prefilling { since, live_by: None }, Some(Input::Spoken(Spoken::Prefilled))) => {
+                self.ready(since, None)
+            }
             (Phase::Prefilling { .. }, Some(Input::Spoken(Spoken::Failed { error, .. }))) => {
                 return Err(Error::Llm(error));
             }
+            (Phase::Prefilling { since, live_by: Some(by) }, _) => self.ready(since, Some(by)),
             (prefilling @ Phase::Prefilling { .. }, _) => prefilling,
             (Phase::Listening, input) => self.listening(input),
-            (Phase::Unfinished { seg, .. }, input @ Some(Input::Event(Event::SpeechStart { .. }))) => {
+            // New speech, or after a forced split the rest of the same speech, which comes without a `SpeechStart`.
+            (
+                Phase::Unfinished { seg, .. },
+                input @ Some(Input::Event(Event::SpeechStart { .. } | Event::Pause(_) | Event::Segment(_))),
+            ) => {
                 self.carry = Some(seg.pcm);
                 self.listening(input)
             }
@@ -442,10 +445,18 @@ impl Conversation {
         Ok(())
     }
 
-    /// The first prompt, which is slow, has left the system prompt in the LLM's cache: Pal listens.
-    fn ready(&mut self, loading_since: Instant) -> Phase {
-        eprintln!("llm_pal: llm prefilled after {} ms", loading_since.elapsed().as_millis());
-        if !self.mic.wait_live(LIVE_TIMEOUT) {
+    /// The first prompt, which is slow, has left the system prompt in the LLM's cache: Pal listens once the
+    /// microphone is live, or at `live_by` without it. Checked per input, so `stop` and `Lost` still come through.
+    fn ready(&mut self, loading_since: Instant, live_by: Option<Instant>) -> Phase {
+        let live_by = live_by.unwrap_or_else(|| {
+            eprintln!("llm_pal: llm prefilled after {} ms", loading_since.elapsed().as_millis());
+            Instant::now() + LIVE_TIMEOUT
+        });
+        let live = self.mic.live();
+        if !live && Instant::now() < live_by {
+            return Phase::Prefilling { since: loading_since, live_by: Some(live_by) };
+        }
+        if !live {
             eprintln!("llm_pal: no sound from '{}' yet", self.mic.device());
         }
         self.send(AgentEvent::Ready { device: self.mic.device().to_string() });
@@ -467,8 +478,8 @@ impl Conversation {
 /// Where the conversation stands between two inputs.
 #[expect(clippy::large_enum_variant, reason = "one move per input, every 20 ms at most")]
 enum Phase {
-    /// Loaded; the LLM reads the system prompt, the microphone's events are dropped.
-    Prefilling { since: Instant },
+    /// Loaded; the LLM reads the system prompt, then (`live_by` set) the microphone gets live. Its events are dropped.
+    Prefilling { since: Instant, live_by: Option<Instant> },
     /// No turn runs; Pal may still be speaking the last reply.
     Listening,
     /// A final segment whose transcript sounds unfinished: answered at `until` unless the user goes on first.

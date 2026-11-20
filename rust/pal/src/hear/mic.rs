@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::JoinHandle;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use async_trait::async_trait;
 use mq_bridge::ReceivedBatch;
@@ -62,17 +62,10 @@ impl MicLink {
         Arc::new(Self { echo: Mutex::new(echo), ..Self::default() })
     }
 
-    /// Waits until the microphone delivers sound, not just the digital silence some devices (e.g. Bluetooth
-    /// headsets switching profile) send for seconds after the start. False on timeout.
-    pub fn wait_live(&self, timeout: Duration) -> bool {
-        let start = Instant::now();
-        while !self.live.load(Ordering::Relaxed) {
-            if start.elapsed() > timeout {
-                return false;
-            }
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        true
+    /// True once the microphone delivers sound, not just the digital silence some devices (e.g. Bluetooth
+    /// headsets switching profile) send for seconds after the start.
+    pub fn live(&self) -> bool {
+        self.live.load(Ordering::Relaxed)
     }
 
     pub fn device(&self) -> &str {

@@ -23,7 +23,8 @@
 //!                   its playback thread ─────────────── Audible, Quiet ──────► inbox
 //! ```
 //!
-//! - [`deploy`] starts all of it, route by route in the order of the diagram: the code to read next to it.
+//! - [`deploy`] starts all of it, route by route: input, the reply routes, then the conversation. The code to read
+//!   next to the diagram.
 //! - Every reply message carries its turn id. What travels on each topic is one type in [`messages`]:
 //!   `[pal.inbox]` [`Input`], `[pal.llm]` [`LlmRequest`], `[pal.pieces]` [`Token`], `[pal.speech]` [`ToSpeaker`].
 //! - `[pal.pieces]` carries tokens in the format of mq-bridge's `stream_to`, from the server, the local model and
@@ -138,10 +139,7 @@ pub fn deploy<H: BlockingHandler>(
         let hear = Route::new(mic, inbox()).deploy(ROUTE_HEAR).await;
         hear.map_err(|e| Error::Audio(format!("{e:#}")))?;
         Route::new(static_ticker(), inbox()).with_batch_size(1).deploy(ROUTE_TICK).await.map_err(routes_error)?;
-        // 2. Control: the conversation reads [pal.inbox], one input at a time, and sends to the topics below.
-        let control = Route::new(inbox(), Endpoint::null()).with_handler(conversation);
-        control.deploy(ROUTE_CONVERSATION).await.map_err(routes_error)?;
-        // 3. Reply: [pal.llm] → model or server → [pal.pieces] → sentences → [pal.speech] → gate and voice.
+        // 2. Reply: [pal.llm] → model or server → [pal.pieces] → sentences → [pal.speech] → gate and voice.
         // A handler may send several messages per input, so it writes to the next topic itself.
         Route::new(topic(LLM_IN), Endpoint::null()).with_handler(llm).deploy(ROUTE_LLM).await.map_err(routes_error)?;
         Route::new(topic(PIECES), Endpoint::null())
@@ -149,7 +147,14 @@ pub fn deploy<H: BlockingHandler>(
             .deploy(ROUTE_SPLIT)
             .await
             .map_err(routes_error)?;
-        Route::new(topic(SPEECH), Endpoint::null()).with_handler(speak).deploy(ROUTE_SPEAK).await.map_err(routes_error)
+        Route::new(topic(SPEECH), Endpoint::null())
+            .with_handler(speak)
+            .deploy(ROUTE_SPEAK)
+            .await
+            .map_err(routes_error)?;
+        // 3. Control, last: a conversation that ends at once stops the reply routes, so they must be deployed.
+        let control = Route::new(inbox(), Endpoint::null()).with_handler(conversation);
+        control.deploy(ROUTE_CONVERSATION).await.map_err(routes_error)
     });
     if deployed.is_err() {
         stop_inbox(rt);

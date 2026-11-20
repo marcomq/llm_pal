@@ -1,12 +1,12 @@
 //! One input while a turn runs: passes the spoken sentences on, settles a held reply on the segment's end (speak
-//! it) or the user going on (drop it), and ends the reply on speech after a barge-in. Speech that doesn't
+//! it) or the user going on (drop it), and ends the reply on words after a barge-in. Speech that doesn't
 //! interrupt the reply is answered after it (`pending`).
 
 use std::sync::atomic::Ordering;
 use std::time::Instant;
 
 use super::answer::speech_end;
-use super::turn::Turn;
+use super::turn::{Cue, Turn};
 use super::unfinished::{UNFINISHED_WAIT, waits_for_more};
 use super::{AgentEvent, Conversation, Phase};
 use crate::hear::event::{Event, Segment};
@@ -37,6 +37,10 @@ impl Conversation {
             Input::Spoken(Spoken::Done { turn }) if turn == t.id => return self.done(t),
             Input::Spoken(Spoken::Failed { turn, error }) if turn == t.id => {
                 eprintln!("llm_pal: {error}");
+                // Nothing of it played, so no `Quiet` may follow the `Said` that marked the voice active.
+                if t.first_audio.is_none() {
+                    self.mic.output_active.store(false, Ordering::Relaxed);
+                }
                 self.send(AgentEvent::ReplyFailed(error));
                 return self.drop_turn(t);
             }
@@ -64,9 +68,7 @@ impl Conversation {
                 if t.first_audio.is_none() {
                     return self.go_on(t, event);
                 }
-                self.transport.cancel(&t.id);
-                self.done(t);
-                return self.listening(Some(Input::Event(event)));
+                return self.barged(t, event);
             }
             // As in `cue`: without barge-in, speech over Pal's voice may be that voice, so it isn't merged.
             Input::Event(Event::Segment(seg)) if seg.during_output && !self.cfg.barge_in => {
@@ -109,6 +111,22 @@ impl Conversation {
         self.tags = t.tags_before;
         self.carry = Some([self.carry.take().unwrap_or_default(), t.p.pcm].concat());
         self.listening(Some(Input::Event(event)))
+    }
+
+    /// Speech after a barge-in while the reply is heard. Words end the reply, which may still be generating, and are
+    /// answered; no words, or room talk in party mode, let it go on.
+    fn barged(&mut self, t: Turn, event: Event) -> Phase {
+        let t0 = Instant::now();
+        let Some(Cue::Speech(seg, early)) = self.cue(Some(Input::Event(event))) else { return Phase::Replying(t) };
+        let Some((text, text_at)) = self.transcribe(&seg, early) else { return Phase::Replying(t) };
+        if self.party.as_ref().is_some_and(|p| !p.called(&text)) && self.persona.joke(&text).is_none() {
+            let stt_ms = text_at.duration_since(t0).as_millis();
+            self.answer(seg, early, text, t0, stt_ms, text_at);
+            return Phase::Replying(t);
+        }
+        self.transport.cancel(&t.id);
+        self.done(t);
+        self.understood(seg, early, text, t0, text_at)
     }
 
     /// The speech of a held reply ended at `end`, which arrived at `arrived`: the reply may play. `false` if the

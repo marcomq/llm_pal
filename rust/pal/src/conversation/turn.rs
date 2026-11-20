@@ -135,6 +135,18 @@ impl Conversation {
             Cue::Speech(seg, early) => (seg, early),
         };
         let Some((text, text_at)) = self.transcribe(&seg, early) else { return Phase::Listening };
+        self.understood(seg, early, text, t0, text_at)
+    }
+
+    /// The transcript is there: an unfinished sentence waits for more, anything else is answered.
+    pub(super) fn understood(
+        &mut self,
+        seg: Segment,
+        early: bool,
+        text: String,
+        t0: Instant,
+        text_at: Instant,
+    ) -> Phase {
         let stt_ms = text_at.duration_since(t0).as_millis();
         if !early && waits_for_more(&text, seg.turn_complete, self.cfg.language) {
             return Phase::Unfinished { until: text_at + UNFINISHED_WAIT, seg, text, t0, stt_ms, text_at };

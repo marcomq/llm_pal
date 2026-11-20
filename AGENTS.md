@@ -18,8 +18,8 @@ functions (`init_audio`, `init_log`, `background_thread`). No `cfg(target_os)` o
 ## The flow: microphone → reply
 
 `PalNode::start` (`godot.rs`) → `Agent::start` spawns the agent's thread (`run`): `load` loads the parts, then
-`transport::deploy` connects them, every route in the order of the data flow (read it beside the diagram in
-`transport.rs`). The handler of `pal_conversation` is `Conversation::handle`, the main loop: one `Input` from
+`transport::deploy` connects them: input routes, reply routes, the conversation last (read it beside the diagram
+in `transport.rs`). The handler of `pal_conversation` is `Conversation::handle`, the main loop: one `Input` from
 `pal.inbox` at a time (`None` = tick), a `match` over the `Phase` (`Prefilling`, `Listening`, `Unfinished`,
 `Replying`). An error from `handle` (`stop`, or `Event::Lost` from a lost microphone) ends it: the handler drops the
 conversation and with it the reply routes, the agent's thread stops the input side (`stop_inbox`). One turn (`cue` → `turn` → `answer` → `start`, then `follow` per input until `done`) is in

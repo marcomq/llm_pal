@@ -247,6 +247,56 @@ fn words_after_a_barge_in_stop_the_last_reply() {
 }
 
 #[test]
+fn a_barge_in_while_the_reply_is_generated_keeps_it_until_words_are_heard() {
+    let t = topics();
+    let (mut c, events) = pal(&t, true);
+    say(&t, &mut c, QUESTION, Event::Segment, true);
+    assert_eq!(reply_of(next(&t.llm)), "turn-1");
+    report(&mut c, Spoken::Said { turn: "turn-1".into(), text: "Feuer und Eis.".into(), at: Instant::now() });
+    report(&mut c, Spoken::Audible { turn: "turn-1".into(), at: Instant::now() });
+
+    c.handle(Some(Input::Event(Event::BargeIn { at_ms: 0 }))).unwrap();
+    assert_eq!(to_speaker(&t.speech).1, ToSpeaker::Pause);
+    say(&t, &mut c, "", Event::Segment, true);
+    assert_eq!(to_speaker(&t.speech).1, ToSpeaker::Resume, "a cough: the reply goes on");
+    assert!(matches!(&c.phase, Phase::Replying(r) if r.id == "turn-1"));
+    nothing(&t.llm);
+
+    report(&mut c, Spoken::Said { turn: "turn-1".into(), text: "Und viel Wind.".into(), at: Instant::now() });
+    c.handle(Some(Input::Event(Event::BargeIn { at_ms: 0 }))).unwrap();
+    assert_eq!(to_speaker(&t.speech).1, ToSpeaker::Pause);
+    say(&t, &mut c, "Moment, warte mal.", Event::Segment, true);
+    assert_eq!(to_speaker(&t.speech), ("turn-1".into(), ToSpeaker::Stop));
+    assert!(matches!(LlmRequest::from_message(&next(&t.llm)).unwrap(), LlmRequest::Prefill { .. }));
+    assert_eq!(reply_of(next(&t.llm)), "turn-2");
+    assert!(events.try_iter().any(|e| matches!(e, AgentEvent::Interrupted)));
+}
+
+#[test]
+fn after_a_forced_split_an_unfinished_sentence_takes_the_rest() {
+    let t = topics();
+    let (mut c, _events) = pal(&t, false);
+    let forced = |seg: Segment| Event::Segment(Segment { forced_split: true, ..seg });
+    say(&t, &mut c, "Ich wollte fragen, ob", forced, false);
+    assert!(matches!(c.phase, Phase::Unfinished { .. }));
+    say(&t, &mut c, "Ich wollte fragen, ob Vulkane wachsen.", Event::Segment, true);
+    assert_eq!(reply_of(next(&t.llm)), "turn-1");
+    assert!(matches!(&c.phase, Phase::Replying(r) if r.p.pcm.len() == 2 * 1600), "both parts in one");
+}
+
+#[test]
+fn waiting_for_the_microphone_lets_stop_through() {
+    let t = topics();
+    let (mut c, events) = pal(&t, false);
+    c.phase = Phase::Prefilling { since: Instant::now(), live_by: None };
+    report(&mut c, Spoken::Prefilled);
+    assert!(matches!(c.phase, Phase::Prefilling { live_by: Some(_), .. }), "the microphone isn't live yet");
+    c.shared.quit.store(true, Ordering::SeqCst);
+    assert!(matches!(c.handle(None), Err(Error::Stopped)));
+    assert!(events.try_iter().next().is_none(), "no Ready after stop");
+}
+
+#[test]
 fn going_on_before_the_reply_is_heard_answers_both_at_once() {
     let t = topics();
     let (mut c, _events) = pal(&t, false);
@@ -297,7 +347,7 @@ fn a_lost_microphone_or_stop_ends_the_conversation() {
 fn while_prefilling_speech_is_dropped_and_a_failure_ends_it() {
     let t = topics();
     let (mut c, _events) = pal(&t, false);
-    c.phase = Phase::Prefilling { since: Instant::now() };
+    c.phase = Phase::Prefilling { since: Instant::now(), live_by: None };
     say(&t, &mut c, QUESTION, Event::Segment, true);
     assert!(matches!(c.phase, Phase::Prefilling { .. }));
     nothing(&t.llm);
