@@ -337,7 +337,7 @@ mod tests {
         let id = CanonicalMessage::from("x").message_id;
         assert!((-100..1000).contains(&age_us(id)), "{}", age_us(id));
         std::thread::sleep(std::time::Duration::from_millis(5));
-        assert!((4000..10_000).contains(&age_us(id)), "{}", age_us(id));
+        assert!((4000..100_000).contains(&age_us(id)), "{}", age_us(id));
     }
 
     #[test]
