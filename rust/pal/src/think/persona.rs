@@ -4,7 +4,7 @@ use std::collections::VecDeque;
 use std::hash::{BuildHasher, RandomState};
 
 use crate::think::language::Language;
-use crate::think::llm::{Message, Role};
+use crate::think::local_llm::{Message, Role};
 
 /// Longer lines are about more than a quip's trigger and go to the model.
 const QUIP_MAX_WORDS: usize = 10;
@@ -151,7 +151,7 @@ impl Persona {
 
     /// The user's line as the model sees it: prosody tags, then the transcript.
     pub fn user_line(transcript: &str, tags: &str) -> String {
-        if tags.is_empty() { transcript.to_string() } else { format!("{tags} {transcript}") }
+        if tags.is_empty() { transcript.to_string() } else { format!("{transcript} {tags}") }
     }
 
     pub fn messages(&self, user_line: &str) -> Vec<Message> {
@@ -258,7 +258,7 @@ mod tests {
         p.remember("ignored".into(), String::new());
         let m = p.messages(&Persona::user_line("Hello", "[question]"));
         let text: Vec<_> = m.iter().map(|m| m.content.as_str()).collect();
-        assert_eq!(text, ["sys", "u3", "a3", "u4", "a4", "u5", "a5", "[question] Hello"]);
+        assert_eq!(text, ["sys", "u3", "a3", "u4", "a4", "u5", "a5", "Hello [question]"]);
         assert_eq!(m[1].role, Role::User);
         assert_eq!(m[2].role, Role::Assistant);
     }

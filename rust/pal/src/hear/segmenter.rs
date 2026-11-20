@@ -29,7 +29,7 @@ impl Default for SegmenterConfig {
             off: 0.35,
             pre_roll_ms: 250,
             end_silence_ms: 700,
-            pause_ms: 250,
+            pause_ms: 300,
             tail_ms: 200,
             min_speech_ms: 250,
             max_ms: 28_000,

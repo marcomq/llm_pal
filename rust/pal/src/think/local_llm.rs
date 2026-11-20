@@ -106,6 +106,7 @@ impl LocalLlm {
             ctx,
             cached: Vec::new(),
             checkpoints: Vec::new(),
+            prefilled: None,
             last_prefill: 0,
             turns: 0,
             fixed: 1,
@@ -115,9 +116,12 @@ impl LocalLlm {
 }
 
 const BATCH: usize = 512;
+/// Before `top_p`, which would otherwise sort the whole vocabulary for every token.
+const TOP_K: i32 = 64;
 /// Covers the earlier replies in the prompt plus the one being generated.
 const PENALTY_LAST_N: i32 = 256;
-/// A reply to a pause that is then dropped keeps the prefill's checkpoint, so the next reply starts from it.
+/// A read-ahead's and a reply's: the reply to a pause that is then dropped is followed by a read-ahead, which the
+/// next reply reads on from.
 const RECENT_CHECKPOINTS: usize = 2;
 
 pub struct LlmSession<'m> {
@@ -125,10 +129,13 @@ pub struct LlmSession<'m> {
     ctx: LlamaContext<'m>,
     /// Tokens in the KV cache: the last prompt plus the reply generated after it.
     cached: Vec<LlamaToken>,
-    /// Saved states after the fixed messages and after the last `RECENT_CHECKPOINTS` prompts, as (tokens, state).
+    /// Saved states after the fixed messages, the last prefill and the last `RECENT_CHECKPOINTS` read-aheads and
+    /// prompts, as (tokens, state).
     /// Models with recurrent layers (Qwen3.5) can't cut their memory back to any position, only return to such a
     /// checkpoint.
     checkpoints: Vec<(usize, SeqState)>,
+    /// The end of the last prefill, the history: a line that changes before its mark goes back there.
+    prefilled: Option<usize>,
     last_prefill: usize,
     /// Varies the seed per reply; with the same seed, similar prompts drew the same reply again.
     turns: u32,
@@ -173,14 +180,29 @@ impl LlmSession<'_> {
         }
         self.cached.truncate(at);
         self.checkpoints.retain(|(n, _)| *n <= at);
+        self.prefilled = self.prefilled.filter(|&n| n <= at);
         Ok(())
     }
 
     /// Reads `messages` into the cache ahead of time, so a reply to a prompt that starts with them only reads the
     /// rest. Pal calls this while it speaks, after the history changed.
     pub fn prefill(&mut self, messages: &[Message]) -> Result<()> {
+        self.read(&chatml_turns(messages))?;
+        self.prefilled = Some(self.cached.len());
+        Ok(())
+    }
+
+    /// Reads `messages` with the last one cut after `mark` bytes, while the user is still saying it: a reply to a
+    /// line that starts the same reads only the rest.
+    pub fn read_ahead(&mut self, messages: &[Message], mark: usize) -> Result<()> {
+        let Some((last, before)) = messages.split_last() else { return Ok(()) };
+        let Some(said) = last.content.get(..mark) else { return Ok(()) };
+        self.read(&format!("{}{}{said}", chatml_turns(before), opening(last.role)))
+    }
+
+    fn read(&mut self, text: &str) -> Result<()> {
         let vocab = self.llm.model.vocab();
-        let prompt = vocab.tokenize(chatml_turns(messages).as_bytes(), vocab.should_add_bos(), true);
+        let prompt = vocab.tokenize(text.as_bytes(), vocab.should_add_bos(), true);
         if prompt.len() + self.llm.cfg.max_tokens > self.llm.cfg.n_ctx as usize {
             return Ok(());
         }
@@ -304,10 +326,11 @@ impl LlmSession<'_> {
         }
         if let Ok(state) = self.ctx.state_seq_get(0, LlamaStateSeqFlags::PARTIAL_ONLY) {
             tracing::debug!(at = n, bytes = state.byte_len(), "checkpoint");
-            let recent = self.checkpoints.iter().filter(|(c, _)| Some(*c) != keep_system).count();
+            let kept = |c: usize| Some(c) == keep_system || Some(c) == self.prefilled;
+            let recent = self.checkpoints.iter().filter(|(c, _)| !kept(*c)).count();
             let mut oldest = (recent + 1).saturating_sub(RECENT_CHECKPOINTS);
             self.checkpoints.retain(|(c, _)| {
-                let drop = Some(*c) != keep_system && oldest > 0;
+                let drop = !kept(*c) && oldest > 0;
                 oldest -= drop as usize;
                 !drop
             });
@@ -319,26 +342,26 @@ impl LlmSession<'_> {
 /// ChatML as used by Qwen. The empty think block turns Qwen's reasoning mode off.
 pub fn chatml(messages: &[Message]) -> String {
     let mut p = chatml_turns(messages);
-    p.push_str("<|im_start|>");
-    p.push_str(ASSISTANT);
+    p.push_str(opening(Role::Assistant));
     p
 }
 
 fn chatml_turns(messages: &[Message]) -> String {
     let mut p = String::new();
     for m in messages {
-        let start = match m.role {
-            Role::System => "system\n",
-            Role::User => "user\n",
-            Role::Assistant => ASSISTANT,
-        };
-        p.push_str(&format!("<|im_start|>{start}{}<|im_end|>\n", m.content));
+        p.push_str(&format!("{}{}<|im_end|>\n", opening(m.role), m.content));
     }
     p
 }
 
 /// Earlier replies keep their empty think block too, so the cached tokens of a reply match the next prompt.
-const ASSISTANT: &str = "assistant\n<think>\n\n</think>\n\n";
+fn opening(role: Role) -> &'static str {
+    match role {
+        Role::System => "<|im_start|>system\n",
+        Role::User => "<|im_start|>user\n",
+        Role::Assistant => "<|im_start|>assistant\n<think>\n\n</think>\n\n",
+    }
+}
 
 impl LlmSession<'_> {
     /// Generates the assistant's next message, passing text pieces to `on_text` as they arrive.
@@ -372,6 +395,7 @@ impl LlmSession<'_> {
         let mut sampler = LlamaSampler::chain_simple([
             LlamaSampler::logit_bias(model.n_vocab(), &self.llm.banned),
             LlamaSampler::penalties(model.n_vocab(), PENALTY_LAST_N, cfg.repeat_penalty, 0.0, 0.0),
+            LlamaSampler::top_k(TOP_K),
             LlamaSampler::top_p(cfg.top_p, 1),
             LlamaSampler::temp(cfg.temperature),
             LlamaSampler::dist(cfg.seed.wrapping_add(self.turns)),
@@ -384,11 +408,15 @@ impl LlmSession<'_> {
         let mut text = String::new();
         let mut pending = Vec::new();
         let (started, n_cached) = (Instant::now(), self.cached.len());
+        let mut sampling = std::time::Duration::ZERO;
         for _ in 0..cfg.max_tokens {
             if cancel.load(Ordering::Relaxed) {
                 break;
             }
+            self.ctx.synchronize();
+            let t = Instant::now();
             let token = sampler.sample(&self.ctx, batch.n_tokens() - 1);
+            sampling += t.elapsed();
             if vocab.is_eog(token) {
                 break;
             }
@@ -405,7 +433,8 @@ impl LlmSession<'_> {
         }
         let tokens = self.cached.len() - n_cached;
         let ms = started.elapsed().as_millis() as u64;
-        tracing::debug!(tokens, ms, per_token_ms = ms / tokens.max(1) as u64, "reply generated");
+        let sample_ms = sampling.as_millis() as u64;
+        tracing::debug!(tokens, ms, per_token_ms = ms / tokens.max(1) as u64, sample_ms, "reply generated");
         Ok(text.trim().to_string())
     }
 }
@@ -470,12 +499,48 @@ mod tests {
         );
     }
 
+    fn model_path() -> PathBuf {
+        std::env::var_os("PAL_LLM")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../models/Qwen3.5-2B-Q4_K_M.gguf"))
+    }
+
+    #[test]
+    #[ignore = "needs the GGUF model"]
+    fn a_longer_line_reads_on_from_the_read_ahead() {
+        let llm = LocalLlm::new(&model_path(), LlmConfig::default()).unwrap();
+        let mut session = llm.session().unwrap();
+        let context = [
+            Message::new(Role::System, "Be brief."),
+            Message::new(Role::User, "Hi"),
+            Message::new(Role::Assistant, "Hello."),
+        ];
+        session.prefill(&context).unwrap();
+        let vocab = llm.model.vocab();
+        let tokens = |text: &str| vocab.tokenize(text.as_bytes(), vocab.should_add_bos(), true).len();
+        let history = chatml_turns(&context);
+        let mut ask = |said: &str| {
+            let mut m = context.to_vec();
+            m.push(Message::new(Role::User, format!("{said} [Frage]")));
+            let stop = AtomicBool::new(false);
+            session.reply(&m, &stop, &mut |_| stop.store(true, Ordering::Relaxed)).unwrap();
+            let read = (session.last_prefill(), tokens(&chatml(&m)));
+            session.read_ahead(&m, said.rfind(' ').unwrap()).unwrap();
+            (read, session.last_prefill())
+        };
+        let head = tokens(&format!("{history}<|im_start|>user\nWie wird das"));
+        let (_, ahead) = ask("Wie wird das Wetter?");
+        assert_eq!(ahead, head - tokens(&history), "reads ahead from the prefill");
+        let ((read, of), _) = ask("Wie wird das Wetter morgen in Berlin?");
+        assert_eq!(read, of - head, "the reply reads on from the read-ahead");
+        let ((read, of), _) = ask("Wie war das Wetter gestern in Berlin?");
+        assert_eq!(read, of - tokens(&history), "a change before the mark goes back to the prefill");
+    }
+
     #[test]
     #[ignore = "needs the GGUF model"]
     fn the_next_start_loads_the_fixed_messages_from_a_file() {
-        let model = std::env::var_os("PAL_LLM")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../models/Qwen3.5-2B-Q4_K_M.gguf"));
+        let model = model_path();
         let dir = std::env::temp_dir().join(format!("pal-state-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let link = dir.join("model.gguf");

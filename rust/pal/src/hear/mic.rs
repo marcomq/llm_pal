@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::JoinHandle;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use async_trait::async_trait;
 use mq_bridge::ReceivedBatch;
@@ -62,17 +62,10 @@ impl MicLink {
         Arc::new(Self { echo: Mutex::new(echo), ..Self::default() })
     }
 
-    /// Waits until the microphone delivers sound, not just the digital silence some devices (e.g. Bluetooth
-    /// headsets switching profile) send for seconds after the start. False on timeout.
-    pub fn wait_live(&self, timeout: Duration) -> bool {
-        let start = Instant::now();
-        while !self.live.load(Ordering::Relaxed) {
-            if start.elapsed() > timeout {
-                return false;
-            }
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        true
+    /// True once the microphone delivers sound, not just the digital silence some devices (e.g. Bluetooth
+    /// headsets switching profile) send for seconds after the start.
+    pub fn live(&self) -> bool {
+        self.live.load(Ordering::Relaxed)
     }
 
     pub fn device(&self) -> &str {
@@ -127,6 +120,8 @@ impl CustomEndpointFactory for MicFactory {
 /// Live processing of the microphone. Dropping it stops capture and the worker.
 struct MicConsumer {
     events: mpsc::UnboundedReceiver<Event>,
+    /// `Event::Lost` was sent; the stream ends.
+    lost: bool,
     stop: Arc<AtomicBool>,
     worker: Option<JoinHandle<()>>,
 }
@@ -157,7 +152,7 @@ impl MicConsumer {
             })
             .map_err(|e| Error::Audio(format!("worker thread: {e}")))?;
         ready.await.map_err(|_| Error::Audio("the audio worker died".into()))??;
-        Ok(Self { events, stop, worker: Some(worker) })
+        Ok(Self { events, lost: false, stop, worker: Some(worker) })
     }
 }
 
@@ -173,7 +168,14 @@ impl Drop for MicConsumer {
 #[async_trait]
 impl MessageConsumer for MicConsumer {
     async fn receive_batch(&mut self, _max_messages: usize) -> Result<ReceivedBatch, ConsumerError> {
-        let event = self.events.recv().await.ok_or(ConsumerError::EndOfStream)?;
+        let event = match self.events.recv().await {
+            Some(event) => event,
+            None if !self.lost => {
+                self.lost = true;
+                Event::Lost
+            }
+            None => return Err(ConsumerError::EndOfStream),
+        };
         Ok(ReceivedBatch { messages: vec![event.to_message()], commit: Box::new(|_| Box::pin(async { Ok(()) })) })
     }
 

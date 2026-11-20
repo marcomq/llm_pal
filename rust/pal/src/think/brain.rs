@@ -1,7 +1,7 @@
 //! Where replies come from: the local model on its own thread, or a server behind mq-bridge with the local model
-//! as an optional fallback. `stage` is the handler of the transport's `pal_llm` route.
+//! as an optional fallback. `handler` serves the transport's `pal_llm` route.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{RecvTimeoutError, Sender, channel};
@@ -9,14 +9,12 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 
 use mq_bridge::blocking_handler::{BlockingHandler, HandlerContext};
-use mq_bridge::endpoints::create_consumer_from_route;
 use mq_bridge::models::Endpoint;
-use mq_bridge::traits::{MessageConsumer, MessageDisposition};
-use mq_bridge::{CanonicalMessage, Handled, HandlerError, Publisher};
+use mq_bridge::{CanonicalMessage, Handled, HandlerError};
 
-use crate::think::llm::{LlmConfig, LocalLlm, Message};
-use crate::think::remote::RemoteConfig;
-use crate::transport::{CORRELATION_ID, End, LlmRequest, Report, Spoken, Token, failed, trace_received};
+use crate::think::local_llm::{LlmConfig, LocalLlm, Message};
+use crate::think::remote_llm::RemoteConfig;
+use crate::transport::{End, LlmRequest, Report, Spoken, StreamCall, Token, failed, trace_received};
 use crate::{Error, Result};
 
 /// How often a running reply checks whether its turn was cancelled.
@@ -26,16 +24,9 @@ const CAPACITY: usize = 1024;
 pub const SERVER_TOKENS: &str = "pal.llm.tokens";
 pub const SERVER_CANCEL: &str = "pal.llm.cancel";
 
-pub enum Brain {
-    /// The GGUF file.
-    Local(PathBuf),
-    /// A server; with `fallback`, the local model answers a turn the server fails on before its first word.
-    Remote { server: RemoteConfig, fallback: Option<PathBuf> },
-}
-
 enum Job {
     Close,
-    Prefill(Vec<Message>, Sender<()>),
+    Prefill(Vec<Message>, Option<usize>, Sender<()>),
     Reply { messages: Vec<Message>, stop: Arc<AtomicBool>, pieces: Sender<Piece> },
 }
 
@@ -91,8 +82,12 @@ impl Model {
                 for job in rx {
                     match job {
                         Job::Close => break,
-                        Job::Prefill(messages, done) => {
-                            if let Err(e) = session.prefill(&messages) {
+                        Job::Prefill(messages, mark, done) => {
+                            let read = match mark {
+                                Some(mark) => session.read_ahead(&messages, mark),
+                                None => session.prefill(&messages),
+                            };
+                            if let Err(e) = read {
                                 eprintln!("llm_pal: {e}");
                             }
                             let _ = done.send(());
@@ -116,9 +111,11 @@ impl Model {
         self.jobs.send(job).map_err(|_| failed("the model thread ended"))
     }
 
-    fn prefill(&self, messages: Vec<Message>) -> std::result::Result<(), HandlerError> {
+    /// Returns once the model has read `messages`, the last one only up to byte `mark` if given; a later reply
+    /// starting with them skips that part.
+    pub(crate) fn prefill(&self, messages: Vec<Message>, mark: Option<usize>) -> std::result::Result<(), HandlerError> {
         let (done, wait) = channel();
-        self.send(Job::Prefill(messages, done))?;
+        self.send(Job::Prefill(messages, mark, done))?;
         let _ = wait.recv();
         Ok(())
     }
@@ -159,24 +156,17 @@ impl Model {
     }
 }
 
-/// A reply server behind mq-bridge: each request runs on the runtime, its tokens come back on `SERVER_TOKENS`.
+/// A reply server behind mq-bridge: its tokens come back on `SERVER_TOKENS`.
 pub struct Server {
     config: RemoteConfig,
-    chat: Publisher,
-    tokens: Box<dyn MessageConsumer>,
-    runtime: tokio::runtime::Handle,
+    call: StreamCall,
 }
 
 impl Server {
     pub async fn start(config: RemoteConfig) -> mq_bridge::anyhow::Result<Self> {
         let tokens = Endpoint::new_memory(SERVER_TOKENS, CAPACITY);
         let endpoint = config.endpoint(&tokens, &Endpoint::new_memory(SERVER_CANCEL, CAPACITY))?;
-        Ok(Self {
-            chat: Publisher::new(endpoint).await?,
-            tokens: create_consumer_from_route("pal_llm_server", &tokens).await?,
-            runtime: tokio::runtime::Handle::current(),
-            config,
-        })
+        Ok(Self { call: StreamCall::new("pal_llm_server", endpoint, &tokens).await?, config })
     }
 
     /// Asks for a reply and passes its text on; returns the last token, which says how the reply ended.
@@ -186,52 +176,20 @@ impl Server {
         messages: &[Message],
         ctx: &HandlerContext,
     ) -> std::result::Result<Token, HandlerError> {
-        let request = CanonicalMessage::from(self.config.payload(messages)).with_metadata_kv(CORRELATION_ID, turn);
-        let chat = self.chat.clone();
-        // The answer is the whole text again; the tokens already carry it. It only tells of a request that died.
-        let mut answer = self.runtime.spawn(async move { chat.send(request).await });
-        let mut index = 0;
-        loop {
-            let received = self.runtime.block_on(async {
-                tokio::select! {
-                    biased;
-                    received = self.tokens.receive() => received.map(Ok).map_err(failed),
-                    answered = &mut answer => Ok(Err(match answered {
-                        Ok(Err(e)) => format!("{e:#}"),
-                        Err(e) => e.to_string(),
-                        Ok(Ok(_)) => "the server request ended without its last token".into(),
-                    })),
-                }
-            })?;
-            let received = match received {
-                Ok(received) => received,
-                Err(error) => return Ok(Token::last(turn, index, End::Failed, &error)),
-            };
-            let _ = self.runtime.block_on((received.commit)(MessageDisposition::Ack));
-            trace_received("pal_llm_server", &received.message);
-            let token = Token::from_message(&received.message);
-            // The rest of an earlier reply whose forwarding failed.
-            if token.turn != turn {
-                continue;
-            }
-            if token.end.is_some() {
-                return Ok(token);
-            }
-            ctx.emit(received.message)?;
-            index += 1;
-        }
+        let request = CanonicalMessage::from(self.config.payload(messages));
+        self.call.call(turn, request, |piece| ctx.emit(piece))
     }
 }
 
 /// The `pal_llm` stage: messages in, tokens out. Reports `Prefilled` after each prefill.
-pub fn stage(model: Option<Model>, mut server: Option<Server>, report: Report) -> impl BlockingHandler {
+pub fn handler(model: Option<Model>, mut server: Option<Server>, report: Report) -> impl BlockingHandler {
     move |msg: CanonicalMessage, ctx: &HandlerContext| {
         trace_received("pal_llm", &msg);
         let (turn, messages) = match LlmRequest::from_message(&msg).map_err(failed)? {
-            LlmRequest::Prefill(messages) => {
+            LlmRequest::Prefill { messages, mark } => {
                 // The server keeps no cache; a fallback model reads everything on its first turn instead.
                 if let (None, Some(model)) = (&server, &model) {
-                    model.prefill(messages)?;
+                    model.prefill(messages, mark)?;
                 }
                 report(Spoken::Prefilled);
                 return Ok(Handled::Ack);

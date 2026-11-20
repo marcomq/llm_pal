@@ -57,6 +57,8 @@ pub enum Event {
     /// Lets work start early; `Resume` means the user went on and the final `Segment` will differ.
     Pause(Segment),
     Resume,
+    /// The microphone stopped; no events follow.
+    Lost,
 }
 
 pub(crate) const EVENT: &str = "mic.event";
@@ -72,6 +74,7 @@ impl Event {
             Event::Pause(seg) => ("pause", None, Some(seg)),
             Event::Segment(seg) => ("segment", None, Some(seg)),
             Event::Resume => ("resume", None, None),
+            Event::Lost => ("lost", None, None),
         };
         let mut msg = match seg {
             Some(seg) => pcm_message(&seg.pcm)
@@ -99,6 +102,7 @@ impl Event {
             "pause" => Event::Pause(segment()?),
             "segment" => Event::Segment(segment()?),
             "resume" => Event::Resume,
+            "lost" => Event::Lost,
             _ => return None,
         })
     }

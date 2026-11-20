@@ -1,6 +1,5 @@
 //! The handlers of the transport's `pal_split` (tokens → sentences) and `pal_speak` (gate → voice) routes.
 
-use std::sync::mpsc::Receiver;
 use std::time::Instant;
 
 use mq_bridge::blocking_handler::{BlockingHandler, HandlerContext};
@@ -52,10 +51,8 @@ struct Held {
     done: bool,
 }
 
-/// `speaker` may arrive after the routes start; the stage waits for it on its first message.
-pub fn speak(speaker: Receiver<PocketSpeaker>, language: Language, report: Report) -> impl BlockingHandler {
+pub fn speak(mut speaker: PocketSpeaker, language: Language, report: Report) -> impl BlockingHandler {
     let mut held: Option<Held> = None;
-    let mut ready: Option<PocketSpeaker> = None;
     // The speech thread is gone: nothing is said or done any more, each sentence reports `Failed`.
     let mut broken = false;
     move |msg: CanonicalMessage, ctx: &HandlerContext| {
@@ -64,16 +61,11 @@ pub fn speak(speaker: Receiver<PocketSpeaker>, language: Language, report: Repor
             return Ok(Handled::Ack);
         };
         let turn = turn.as_str();
-        if ready.is_none() {
-            ready = speaker.recv().ok();
-        }
-        let Some(speaker) = ready.as_mut() else {
-            report(Spoken::Failed { turn: turn.to_string(), error: "the voice did not load".into() });
-            return Ok(Handled::Ack);
-        };
-        let mut say = |text: String| match speaker.say(&pronounced(&text, language)) {
-            Ok(()) => report(Spoken::Said { turn: turn.to_string(), text, at: Instant::now() }),
-            Err(e) => {
+        // `Said` goes first: the playback's `Quiet` for this sentence must reach the inbox after it.
+        let mut say = |text: String| {
+            let spoken = pronounced(&text, language);
+            report(Spoken::Said { turn: turn.to_string(), text, at: Instant::now() });
+            if let Err(e) = speaker.say(turn, &spoken) {
                 broken = true;
                 report(Spoken::Failed { turn: turn.to_string(), error: e.to_string() });
             }
@@ -91,6 +83,8 @@ pub fn speak(speaker: Receiver<PocketSpeaker>, language: Language, report: Repor
             ToSpeaker::Discard if holding => held = None,
             ToSpeaker::Release | ToSpeaker::Discard => {}
             ToSpeaker::Stop => speaker.stop(),
+            ToSpeaker::Pause => speaker.pause(),
+            ToSpeaker::Resume => speaker.resume(),
             ToSpeaker::Sentence(_) if ctx.is_cancelled() => {}
             ToSpeaker::Sentence(text) if holding => held.as_mut().expect("holding").sentences.push(text),
             ToSpeaker::Sentence(text) => say(text),
