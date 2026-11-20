@@ -1,0 +1,196 @@
+//! Android: the same three hooks as `desktop.rs`. cpal needs the JavaVM and a Context (via ndk-context); a
+//! GDExtension is loaded with dlopen, so nothing sets them and we fetch them ourselves (from trippy-synth).
+#![allow(unsafe_op_in_unsafe_fn)]
+
+use std::ffi::{CStr, c_char, c_int, c_void};
+use std::sync::Mutex;
+
+use jni_sys::{JNI_OK, JNIEnv, JavaVM, jsize};
+
+use crate::Error;
+
+type GetCreatedJavaVMs = unsafe extern "system" fn(*mut *mut JavaVM, jsize, *mut jsize) -> i32;
+
+const GET_VMS: &CStr = c"JNI_GetCreatedJavaVMs";
+const DT_STRTAB: i64 = 5;
+const DT_SYMTAB: i64 = 6;
+const DT_GNU_HASH: i64 = 0x6fff_fef5;
+
+#[repr(C)]
+struct Elf64Dyn {
+    tag: i64,
+    val: u64,
+}
+
+#[repr(C)]
+struct Elf64Sym {
+    name: u32,
+    info: u8,
+    other: u8,
+    shndx: u16,
+    value: u64,
+    size: u64,
+}
+
+/// `JNI_GetCreatedJavaVMs` from the loaded libart.so. Before Android 12 only libart exports it, and linker
+/// namespaces hide libart from `dlopen`/`dlsym`; `dl_iterate_phdr` still lists it, so read its symbol table.
+unsafe fn libart_get_vms() -> *mut c_void {
+    let mut sym = std::ptr::null_mut::<c_void>();
+    libc::dl_iterate_phdr(Some(find_in_libart), (&mut sym as *mut *mut c_void).cast());
+    sym
+}
+
+unsafe extern "C" fn find_in_libart(info: *mut libc::dl_phdr_info, _: usize, out: *mut c_void) -> c_int {
+    let info = &*info;
+    if info.dlpi_name.is_null() || !CStr::from_ptr(info.dlpi_name).to_bytes().ends_with(b"/libart.so") {
+        return 0;
+    }
+    let phdrs = std::slice::from_raw_parts(info.dlpi_phdr, info.dlpi_phnum as usize);
+    if let Some(dynamic) = phdrs.iter().find(|p| p.p_type == libc::PT_DYNAMIC) {
+        let dynamic = (info.dlpi_addr + dynamic.p_vaddr) as *const Elf64Dyn;
+        *out.cast::<*mut c_void>() = gnu_hash_lookup(info.dlpi_addr, dynamic, GET_VMS);
+    }
+    1
+}
+
+/// Looks up `name` in a loaded ELF's `.dynsym` through its GNU hash table.
+unsafe fn gnu_hash_lookup(base: u64, mut dynamic: *const Elf64Dyn, name: &CStr) -> *mut c_void {
+    let (mut strtab, mut symtab, mut hash) = (0, 0, 0);
+    while (*dynamic).tag != 0 {
+        let d = &*dynamic;
+        // Bionic leaves these unrelocated (glibc relocates them in place).
+        let addr = if d.val < base { base + d.val } else { d.val };
+        match d.tag {
+            DT_STRTAB => strtab = addr,
+            DT_SYMTAB => symtab = addr,
+            DT_GNU_HASH => hash = addr,
+            _ => {}
+        }
+        dynamic = dynamic.add(1);
+    }
+    if strtab == 0 || symtab == 0 || hash == 0 {
+        return std::ptr::null_mut();
+    }
+    let table = hash as *const u32;
+    let (nbuckets, symoffset, bloom_words) = (*table, *table.add(1), *table.add(2) as usize);
+    let buckets = table.add(4 + bloom_words * 2);
+    let chain = buckets.add(nbuckets as usize);
+    let name = name.to_bytes();
+    let h = name.iter().fold(5381u32, |h, &c| h.wrapping_mul(33).wrapping_add(c as u32));
+    let mut i = *buckets.add((h % nbuckets) as usize);
+    if i < symoffset {
+        return std::ptr::null_mut();
+    }
+    loop {
+        let ch = *chain.add((i - symoffset) as usize);
+        let sym = &*(symtab as *const Elf64Sym).add(i as usize);
+        if ch | 1 == h | 1
+            && sym.value != 0
+            && CStr::from_ptr((strtab + sym.name as u64) as *const c_char).to_bytes() == name
+        {
+            return (base + sym.value) as *mut c_void;
+        }
+        if ch & 1 != 0 {
+            return std::ptr::null_mut();
+        }
+        i += 1;
+    }
+}
+
+/// Set once the context is; a failed attempt leaves it unset, so the next stream tries again.
+static READY: Mutex<bool> = Mutex::new(false);
+
+/// Sets the context cpal needs to open any stream (it panics without), not only to list devices.
+pub(crate) fn init_audio() -> Result<(), Error> {
+    let mut ready = READY.lock().unwrap_or_else(|e| e.into_inner());
+    if !*ready {
+        // SAFETY: called once at a time (the lock); the context is set only after every JNI call succeeded.
+        unsafe { try_init() }.ok_or_else(|| Error::Audio("no Android context for audio".into()))?;
+        *ready = true;
+    }
+    Ok(())
+}
+
+unsafe fn try_init() -> Option<()> {
+    let lib = libc::dlopen(c"libnativehelper.so".as_ptr(), libc::RTLD_NOW);
+    let sym = if lib.is_null() { std::ptr::null_mut() } else { libc::dlsym(lib, GET_VMS.as_ptr()) };
+    let sym = if sym.is_null() { libart_get_vms() } else { sym };
+    if sym.is_null() {
+        return None;
+    }
+    let get_vms: GetCreatedJavaVMs = std::mem::transmute(sym);
+    let mut vm: *mut JavaVM = std::ptr::null_mut();
+    let mut n: jsize = 0;
+    if get_vms(&mut vm, 1, &mut n) != JNI_OK || n < 1 {
+        return None;
+    }
+    let mut env: *mut JNIEnv = std::ptr::null_mut();
+    if ((**vm).v1_1.AttachCurrentThread)(vm, (&mut env as *mut *mut JNIEnv).cast(), std::ptr::null_mut()) != JNI_OK {
+        return None;
+    }
+    let f = &(**env).v1_1;
+    let cls = (f.FindClass)(env, c"android/app/ActivityThread".as_ptr());
+    let mid = if cls.is_null() {
+        std::ptr::null_mut()
+    } else {
+        (f.GetStaticMethodID)(env, cls, c"currentApplication".as_ptr(), c"()Landroid/app/Application;".as_ptr())
+    };
+    let app =
+        if mid.is_null() { std::ptr::null_mut() } else { (f.CallStaticObjectMethodA)(env, cls, mid, std::ptr::null()) };
+    if app.is_null() {
+        (f.ExceptionClear)(env);
+        return None;
+    }
+    let global = (f.NewGlobalRef)(env, app);
+    (f.DeleteLocalRef)(env, app);
+    (f.DeleteLocalRef)(env, cls);
+    ndk_context::initialize_android_context(vm as *mut c_void, global as *mut c_void);
+    Some(())
+}
+
+/// Android drops a native library's stderr; this sends its lines (`llm_pal: ...`) to logcat, tag "llm_pal".
+pub(crate) fn init_log() {
+    use std::io::{BufRead, BufReader};
+    use std::os::fd::FromRawFd;
+
+    #[link(name = "log")]
+    unsafe extern "C" {
+        fn __android_log_write(priority: i32, tag: *const c_char, text: *const c_char) -> i32;
+    }
+    const INFO: i32 = 4;
+    let mut fds = [0; 2];
+    // SAFETY: `pipe` fills both fds; fd 2 becomes a copy of the write end, which is then closed.
+    let read = unsafe {
+        if libc::pipe(fds.as_mut_ptr()) != 0 || libc::dup2(fds[1], 2) < 0 {
+            return;
+        }
+        libc::close(fds[1]);
+        std::fs::File::from_raw_fd(fds[0])
+    };
+    std::thread::spawn(move || {
+        for line in BufReader::new(read).lines().map_while(Result::ok) {
+            if let Ok(text) = std::ffi::CString::new(line) {
+                // SAFETY: both strings are NUL-terminated and outlive the call.
+                unsafe { __android_log_write(INFO, c"llm_pal".as_ptr(), text.as_ptr()) };
+            }
+        }
+    });
+}
+
+/// The tracing filter: apps get no environment, so it comes from `adb shell setprop debug.pal.log pal=debug`.
+pub(crate) fn log_filter() -> String {
+    let mut value = [0 as c_char; libc::PROP_VALUE_MAX as usize];
+    // SAFETY: the name is NUL-terminated and `value` holds PROP_VALUE_MAX bytes, the most the call writes.
+    unsafe { libc::__system_property_get(c"debug.pal.log".as_ptr(), value.as_mut_ptr()) };
+    // SAFETY: the call leaves a NUL-terminated string, empty if the property isn't set.
+    unsafe { CStr::from_ptr(value.as_ptr()) }.to_string_lossy().into_owned()
+}
+
+/// Nice 10 for the calling thread and the threads it starts later (llama.cpp's workers inherit it), so speech
+/// and the microphone get the few fast cores first.
+pub(crate) fn background_thread() {
+    // SAFETY: changes only the calling thread's niceness.
+    unsafe {
+        libc::setpriority(libc::PRIO_PROCESS as _, libc::gettid() as _, 10);
+    }
+}

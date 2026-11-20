@@ -1,0 +1,9 @@
+/rust/target
+/models
+/out
+/build
+/testdata
+/godot/bin
+/godot/.godot
+.serena
+.tokensave

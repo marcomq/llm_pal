@@ -1,0 +1,44 @@
+[package]
+name = "pal"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+async-trait = "0.1"
+cpal = "0.18.2"
+godot = { version = "0.5.5", features = ["api-4-7"] }
+hound = "3.5.1"
+# URLs are ASCII here (Hugging Face, local endpoints); 1.0.0 skips IDNA's ICU crates.
+idna_adapter = "=1.0.0"
+llama-cpp-2 = "0.1.160"
+mq-bridge = { version = "1.6", default-features = false, features = ["http-bulk"] }
+mq-bridge-onnx = { version = "0.2.0", default-features = false, features = ["asr"] }
+# ort has no stable 2.0; rc releases break the API, hence the exact pin.
+ort = { version = "=2.0.0-rc.15", default-features = false, features = ["std", "download-binaries", "tls-rustls", "api-22"] }
+pal-tts = { path = "../pal-tts" }
+realfft = "3.5.1"
+rtrb = "0.4.1"
+rubato = "5.0.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+sonora = "0.2.0"
+thiserror = "2"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# Built-in Mozilla roots: the same TLS check on every platform, also where the OS verifier needs Java (Android).
+ureq = "3"
+xn = "0.2.11"
+
+[target.'cfg(target_os = "android")'.dependencies]
+# AAudio LowLatency performance mode; without it Android uses the slow mixer path with large bursts.
+cpal = { version = "0.18.2", features = ["realtime"] }
+# cpal needs the JavaVM and Context, see platform/android.rs.
+jni-sys = "0.4.1"
+libc = "0.2"
+ndk-context = "0.1.1"

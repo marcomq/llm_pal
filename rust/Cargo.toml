@@ -1,0 +1,16 @@
+[workspace]
+resolver = "2"
+members = ["pal", "pal-tts"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+
+# DSP and pitch tracking are slow unoptimized, also in tests.
+[profile.dev]
+opt-level = 2
+
+# Line numbers in backtraces; build.sh strips the Android library that goes into the APK.
+[profile.release]
+debug = "line-tables-only"

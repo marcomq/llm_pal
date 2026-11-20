@@ -1,0 +1,37 @@
+[package]
+name = "pal-tts"
+version.workspace = true
+edition.workspace = true
+license = "MIT"
+description = "Kyutai Pocket TTS in-process, from the model code of kyutai-labs/pocket-tts v4.0.1 (rust/, MIT)"
+
+[dependencies]
+# Pinned as kyutai-labs/pocket-tts v4.0.1 pins them: the ptts API still moves between releases.
+ptts = { git = "https://github.com/gabrieldemarmiesse/xn-ptts", rev = "7efa26973f81bba42cf2ace8da2c1eb9b605d54d", default-features = false, features = ["hf", "audio"] }
+xn = "0.2.11"
+
+anyhow = "1"
+half = "2"
+hf-hub = { version = "1.0", features = ["blocking"], optional = true }
+log = "0.4"
+rand = { version = "0.9", default-features = false, features = ["std", "std_rng", "os_rng"] }
+rand_distr = "0.5"
+reqwest = { version = "0.13", features = ["blocking"], optional = true }
+safetensors = "0.7"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+sha2 = { version = "0.10", optional = true }
+symphonia = { version = "0.5.3", features = ["all"] }
+tokenizers = { version = "0.23.1", default-features = false, features = ["fancy-regex"] }
+
+[features]
+# Fetches models and voices into the Hugging Face cache; without it they come from `use_local_files`.
+download = ["dep:hf-hub", "dep:reqwest", "dep:sha2"]
+
+[dev-dependencies]
+hound = "3.5.1"
+
+# Apple's Accelerate framework for the f32 matmuls, as in Kyutai's macOS release builds.
+[target.'cfg(target_os = "macos")'.dependencies]
+ptts = { git = "https://github.com/gabrieldemarmiesse/xn-ptts", rev = "7efa26973f81bba42cf2ace8da2c1eb9b605d54d", default-features = false, features = ["hf", "audio", "accelerate"] }
