@@ -171,8 +171,6 @@ explicit consent; never add recordings or cloned voices to the repository or the
 - Module overviews (`lib.rs`, `conversation.rs`, `hear.rs`, `think.rs`, `speak.rs`) show only what happens
   inside the module. Topics, routes and reports between modules are drawn only in `transport.rs`; update that
   diagram with the topology, and point to it elsewhere instead of repeating it.
-- `conversation.rs` + `conversation/` + `transport.rs` stay at most 1475 lines without test code (raised from 1450
-  for `go_on`); raise it only with a reason.
 - Speech while a reply is heard (no barge-in) is kept as one `pending` segment and answered after it; `Pause`/`Resume`
   then are ignored. Waits (`UNFINISHED_WAIT`, `RESUME_AFTER`) are checked per input or tick, up to 20 ms late.
 - `conversation_handler` keeps a `PocketSpeaker` clone only to cut the voice off at the end, as `Route::stop` doesn't
