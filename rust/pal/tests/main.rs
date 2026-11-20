@@ -107,7 +107,7 @@ mod models {
 
     use pal::hear::stt;
     use pal::think::language::Language;
-    use pal::think::llm::{LlmConfig, LocalLlm};
+    use pal::think::local_llm::{LlmConfig, LocalLlm};
     use pal::think::persona::{DEFAULT_NAME, Persona};
     use pal::think::prosody_tags::{self, ProsodyTags};
 
@@ -224,29 +224,66 @@ mod models {
 /// The reply routes with the real model and voice: plain, held, discarded, canned and interrupted turns. Speaks
 /// through the speakers.
 mod reply {
-    use std::sync::mpsc::channel;
+    use std::sync::mpsc::{Receiver, channel};
     use std::time::{Duration, Instant};
 
+    use mq_bridge::blocking_handler::HandlerContext;
+    use mq_bridge::models::Endpoint;
+    use mq_bridge::{Caller, CanonicalMessage, Handled, Route};
+
     use pal::speak::tts::{self, PocketSpeaker};
-    use pal::think::brain::Brain;
+    use pal::think::brain::Model;
     use pal::think::language::Language;
     use pal::think::persona::{DEFAULT_NAME, Persona};
-    use pal::transport::{Input, Spoken, Transport};
+    use pal::transport::{self, Input, Parts, Spoken, Transport};
 
     use super::*;
 
     const LANG: Language = Language::German;
     const LONG: Duration = Duration::from_secs(60);
 
-    fn spoken(t: &mut Transport, timeout: Duration) -> Option<Spoken> {
-        match t.next(timeout)? {
-            Input::Spoken(s) => Some(s),
-            Input::Event(e) => panic!("no microphone, but {e:?}"),
-        }
+    /// Pal with a silent microphone and no STT; the reports that reach `[pal.inbox]` come out in place of the
+    /// conversation, which is the test itself, with the `Transport`.
+    fn deploy(
+        rt: &tokio::runtime::Runtime,
+        speaker: &PocketSpeaker,
+        persona: &Persona,
+    ) -> (Transport, Receiver<Spoken>) {
+        let none = Route::new(Endpoint::new_memory("test.stt", 1), Endpoint::new_response())
+            .with_handler(|_: CanonicalMessage| async { Ok(Handled::Ack) });
+        let parts = Parts {
+            mic: Endpoint::new_memory("test.mic", 1),
+            stt: rt.block_on(Caller::deploy("test_stt", none)).unwrap(),
+            model: Some(Model::start(&models().join("Qwen3.5-2B-Q4_K_M.gguf"), persona.fixed_messages()).unwrap()),
+            server: None,
+            speaker: speaker.clone(),
+            language: LANG,
+        };
+        let (transport_tx, transport) = channel();
+        let (tx, rx) = channel();
+        transport::deploy(rt.handle(), parts, move |t| {
+            transport_tx.send(t).unwrap();
+            Ok(move |msg: CanonicalMessage, _: &HandlerContext| {
+                match Input::from_message(&msg) {
+                    // Playback, not the reply routes: this test checks what is queued.
+                    Some(Input::Spoken(Spoken::Audible { .. } | Spoken::Quiet)) => {}
+                    Some(Input::Spoken(s)) => drop(tx.send(s)),
+                    Some(Input::Event(e)) => panic!("no microphone, but {e:?}"),
+                    None => {}
+                }
+                Ok(Handled::Ack)
+            })
+        })
+        .unwrap();
+        (transport.recv().unwrap(), rx)
+    }
+
+    fn spoken(t: &Receiver<Spoken>, timeout: Duration) -> Option<Spoken> {
+        t.recv_timeout(timeout).ok()
     }
 
     /// Reports of `turn` until its `Done`; panics on `Failed` or a timeout.
-    fn until_done(t: &mut Transport, turn: &str) -> Vec<(Instant, String)> {
+    fn until_done(t: &Receiver<Spoken>, turn: &str) -> Vec<(Instant, String)> {
         let mut said = Vec::new();
         loop {
             match spoken(t, LONG).expect("turn finishes") {
@@ -258,7 +295,7 @@ mod reply {
         }
     }
 
-    fn quiet(t: &mut Transport, wait: Duration) -> Vec<Spoken> {
+    fn quiet(t: &Receiver<Spoken>, wait: Duration) -> Vec<Spoken> {
         let until = Instant::now() + wait;
         std::iter::from_fn(|| spoken(t, until.saturating_duration_since(Instant::now()))).collect()
     }
@@ -268,46 +305,43 @@ mod reply {
     fn reply_routes_handle_every_kind_of_turn() {
         let _llama = llama_turn();
         tts::use_local_files(&models());
-        let mut speaker = PocketSpeaker::new("juergen", LANG).unwrap();
+        let speaker = PocketSpeaker::new("juergen", LANG).unwrap();
         let persona = Persona::kitt(LANG, DEFAULT_NAME);
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let (speaker_tx, speaker_rx) = channel();
-        let brain = Brain::Local(models().join("Qwen3.5-2B-Q4_K_M.gguf"));
-        let mut t = Transport::start(rt.handle().clone(), brain, persona.fixed_messages(), speaker_rx, LANG).unwrap();
-        speaker_tx.send(speaker.clone()).unwrap();
+        let (t, inbox) = deploy(&rt, &speaker, &persona);
         let ask = |q: &str| persona.messages(&Persona::user_line(q, ""));
 
         t.prefill(&persona.context()).unwrap();
-        assert!(matches!(spoken(&mut t, LONG), Some(Spoken::Prefilled)));
+        assert!(matches!(spoken(&inbox, LONG), Some(Spoken::Prefilled)));
 
         let t0 = Instant::now();
         t.reply("t1", &ask("Was hältst du von Regen?"), false).unwrap();
-        let said = until_done(&mut t, "t1");
+        let said = until_done(&inbox, "t1");
         assert!(!said.is_empty());
         println!("t1 first sentence after {} ms: {:?}", (said[0].0 - t0).as_millis(), said[0].1);
 
         t.reply("t2", &ask("Erzähl mir etwas über Autos."), true).unwrap();
-        let early = quiet(&mut t, Duration::from_millis(1500));
+        let early = quiet(&inbox, Duration::from_millis(1500));
         assert!(early.iter().all(|s| !matches!(s, Spoken::Said { .. } | Spoken::Done { .. })), "held: {early:?}");
         let released = Instant::now();
         t.release("t2").unwrap();
-        let said = until_done(&mut t, "t2");
+        let said = until_done(&inbox, "t2");
         println!("t2 released, first sentence after {} ms", (said[0].0 - released).as_millis());
 
         t.reply("t3", &ask("Kannst du mir einen Rat geben?"), true).unwrap();
         std::thread::sleep(Duration::from_millis(300));
         t.discard("t3").unwrap();
         t.canned("t4", "Das war ein Witz. Ein guter sogar!", false).unwrap();
-        let said = until_done(&mut t, "t4");
+        let said = until_done(&inbox, "t4");
         assert_eq!(said.len(), 2, "{said:?}");
-        let late = quiet(&mut t, Duration::from_millis(500));
+        let late = quiet(&inbox, Duration::from_millis(500));
         assert!(late.is_empty(), "after discard: {late:?}");
 
         t.reply("t5", &ask("Was machst du am liebsten? Erzähl ausführlich."), false).unwrap();
         let deadline = Instant::now() + LONG;
         loop {
             let left = deadline.checked_duration_since(Instant::now()).expect("t5 says a sentence in time");
-            match spoken(&mut t, left) {
+            match spoken(&inbox, left) {
                 Some(Spoken::Said { turn, .. }) if turn == "t5" => break,
                 Some(Spoken::Done { turn } | Spoken::Failed { turn, .. }) if turn == "t5" => panic!("t5 ended unsaid"),
                 _ => {}
@@ -315,7 +349,7 @@ mod reply {
         }
         let cut = Instant::now();
         t.interrupt("t5").unwrap();
-        let late = quiet(&mut t, Duration::from_millis(1500));
+        let late = quiet(&inbox, Duration::from_millis(1500));
         assert!(late.iter().all(|s| !matches!(s, Spoken::Done { .. })), "after interrupt: {late:?}");
         let said_late = late.iter().filter(|s| matches!(s, Spoken::Said { .. })).count();
         println!(
@@ -326,5 +360,7 @@ mod reply {
 
         speaker.stop();
         drop(t);
+        transport::stop_inbox(rt.handle());
+        rt.block_on(Route::stop("test_stt"));
     }
 }

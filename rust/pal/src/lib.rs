@@ -1,6 +1,18 @@
-//! Pal: a voice assistant. `hear` turns the microphone into text, `think` decides what to say, `speak` says it.
-//! `transport` connects them over mq-bridge, `godot` is the app's entry point. See AGENTS.md for the flow.
+//! Pal: a voice assistant.
+//!
+//! ```text
+//! godot          entry: PalNode::start, signals back to the UI
+//! conversation   the control: one input at a time, a match over the phase   ← start reading here
+//! transport      how the parts connect: routes, topics, reports
+//! hear           microphone → speech events → text
+//! think          persona, prompts, the LLM (brain: local_llm or remote_llm)
+//! speak          sentences → Pocket TTS → loudspeaker
+//! ```
+//!
+//! Each module's doc shows only what happens inside it; how they connect is drawn once, in `transport.rs`.
+//! See AGENTS.md for each step.
 
+pub mod conversation;
 mod cpu;
 pub mod downloader;
 mod godot;

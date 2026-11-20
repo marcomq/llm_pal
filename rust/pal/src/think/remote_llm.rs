@@ -5,7 +5,7 @@
 use mq_bridge::models::Endpoint;
 use serde_json::json;
 
-use crate::think::llm::{Message, Role};
+use crate::think::local_llm::{Message, Role};
 use crate::{Error, Result};
 
 const ANTHROPIC_VERSION: &str = "2026-10-21";

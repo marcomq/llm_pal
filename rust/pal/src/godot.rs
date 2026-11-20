@@ -1,10 +1,10 @@
-//! Godot binding: `PalNode` runs the conversation agent and exposes its state, Pal's voice level and texts.
-//! Pal speaks with Kyutai Pocket TTS.
+//! The app's entry point: Godot's `main.gd` calls `PalNode::start`, which starts the conversation's thread
+//! (`conversation::Agent`). `process` turns its events into Godot signals each frame.
 
-use crate::think::conversation::{Agent, AgentConfig, AgentEvent, State};
+use crate::conversation::{Agent, AgentConfig, AgentEvent, State};
 use crate::think::language::Language;
 use crate::think::persona::DEFAULT_NAME;
-use crate::think::remote::{Provider, RemoteConfig};
+use crate::think::remote_llm::{Provider, RemoteConfig};
 use godot::classes::{INode, Node};
 use godot::prelude::*;
 
@@ -162,8 +162,9 @@ impl PalNode {
     #[constant]
     const STOPPED: i32 = State::Stopped as i32;
 
-    /// Absolute path: `model_dir` holds the models; missing ones are downloaded first.
+    /// Starts Pal: builds the `AgentConfig` from the settings and starts the conversation (`Agent::start`).
     /// After `stop`, the new agent starts once the old one has finished.
+    /// Absolute path: `model_dir` holds the models; missing ones are downloaded first.
     #[func]
     fn start(&mut self, model_dir: GString) {
         if self.stopping.is_some() {

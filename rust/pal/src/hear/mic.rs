@@ -127,6 +127,8 @@ impl CustomEndpointFactory for MicFactory {
 /// Live processing of the microphone. Dropping it stops capture and the worker.
 struct MicConsumer {
     events: mpsc::UnboundedReceiver<Event>,
+    /// `Event::Lost` was sent; the stream ends.
+    lost: bool,
     stop: Arc<AtomicBool>,
     worker: Option<JoinHandle<()>>,
 }
@@ -157,7 +159,7 @@ impl MicConsumer {
             })
             .map_err(|e| Error::Audio(format!("worker thread: {e}")))?;
         ready.await.map_err(|_| Error::Audio("the audio worker died".into()))??;
-        Ok(Self { events, stop, worker: Some(worker) })
+        Ok(Self { events, lost: false, stop, worker: Some(worker) })
     }
 }
 
@@ -173,7 +175,14 @@ impl Drop for MicConsumer {
 #[async_trait]
 impl MessageConsumer for MicConsumer {
     async fn receive_batch(&mut self, _max_messages: usize) -> Result<ReceivedBatch, ConsumerError> {
-        let event = self.events.recv().await.ok_or(ConsumerError::EndOfStream)?;
+        let event = match self.events.recv().await {
+            Some(event) => event,
+            None if !self.lost => {
+                self.lost = true;
+                Event::Lost
+            }
+            None => return Err(ConsumerError::EndOfStream),
+        };
         Ok(ReceivedBatch { messages: vec![event.to_message()], commit: Box::new(|_| Box::pin(async { Ok(()) })) })
     }
 

@@ -4,7 +4,7 @@ use std::collections::VecDeque;
 use std::hash::{BuildHasher, RandomState};
 
 use crate::think::language::Language;
-use crate::think::llm::{Message, Role};
+use crate::think::local_llm::{Message, Role};
 
 /// Longer lines are about more than a quip's trigger and go to the model.
 const QUIP_MAX_WORDS: usize = 10;
