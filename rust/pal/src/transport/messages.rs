@@ -19,6 +19,7 @@ pub const CORRELATION_ID: &str = "correlation_id";
 /// The turn of a control message, which a cancel must not skip.
 const TURN: &str = "turn";
 const KIND: &str = "kind";
+const MARK: &str = "mark";
 /// How long before the message was made a report's `at` was, in µs.
 const AT_BEFORE: &str = "at_before_us";
 /// mq-bridge's `stream_to` keys, used for every token.
@@ -58,8 +59,12 @@ fn age_us(id: u128) -> i64 {
 
 /// `[pal.llm]`: what the model is asked.
 pub enum LlmRequest {
-    /// Read these messages into the model's cache; no reply.
-    Prefill(Vec<Message>),
+    /// Read these messages into the model's cache; no reply. With a `mark`, the last message only up to that byte:
+    /// the user is still saying it.
+    Prefill {
+        messages: Vec<Message>,
+        mark: Option<usize>,
+    },
     Reply {
         turn: String,
         messages: Vec<Message>,
@@ -69,8 +74,12 @@ pub enum LlmRequest {
 impl LlmRequest {
     pub fn to_message(&self) -> serde_json::Result<CanonicalMessage> {
         Ok(match self {
-            Self::Prefill(messages) => {
-                CanonicalMessage::from(serde_json::to_string(messages)?).with_metadata_kv(KIND, "prefill")
+            Self::Prefill { messages, mark } => {
+                let msg = CanonicalMessage::from(serde_json::to_string(messages)?).with_metadata_kv(KIND, "prefill");
+                match mark {
+                    Some(mark) => msg.with_metadata_kv(MARK, mark.to_string()),
+                    None => msg,
+                }
             }
             Self::Reply { turn, messages } => CanonicalMessage::from(serde_json::to_string(messages)?)
                 .with_metadata_kv(KIND, "reply")
@@ -81,7 +90,7 @@ impl LlmRequest {
     pub fn from_message(msg: &CanonicalMessage) -> serde_json::Result<Self> {
         let messages = serde_json::from_slice(&msg.payload)?;
         Ok(match meta(msg, KIND) {
-            "prefill" => Self::Prefill(messages),
+            "prefill" => Self::Prefill { messages, mark: meta(msg, MARK).parse().ok() },
             _ => Self::Reply { turn: meta(msg, CORRELATION_ID).to_string(), messages },
         })
     }
@@ -338,6 +347,11 @@ mod tests {
             panic!("a reply");
         };
         assert_eq!(turn, "t1");
+        for mark in [None, Some(7)] {
+            let request = LlmRequest::Prefill { messages: Vec::new(), mark };
+            let read = LlmRequest::from_message(&request.to_message().unwrap()).unwrap();
+            assert!(matches!(read, LlmRequest::Prefill { mark: m, .. } if m == mark));
+        }
 
         let token = Token::from_message(&Token::last("t1", 3, End::Failed, "boom").to_message());
         assert_eq!(

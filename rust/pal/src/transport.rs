@@ -8,8 +8,8 @@
 //!   reports of the routes below (Report) ────────────┘      Input         Conversation::handle, the main loop
 //!                                                                              │ transcribe(pcm)
 //!                                                                              ├──► caller pal_stt ──► Parakeet
-//!   prefill() reply() ──► [pal.llm]                                            │
-//!                            ▼                                                 │
+//!   prefill() read_ahead() reply() ──► [pal.llm]                               │
+//!                                          ▼                                   │
 //!                   route pal_llm (think::brain) ─── Prefilled ──► inbox       │
 //!                   the local model thread, or a server's tokens               │
 //!                   on [pal.llm.tokens]                                        │
@@ -186,7 +186,13 @@ impl Transport {
 
     /// Reads `messages` into the model's cache; `Spoken::Prefilled` follows.
     pub fn prefill(&self, messages: &[Message]) -> Result<()> {
-        self.send_llm(LlmRequest::Prefill(messages.to_vec()))
+        self.send_llm(LlmRequest::Prefill { messages: messages.to_vec(), mark: None })
+    }
+
+    /// Reads `messages` with the last one up to byte `mark` into the local model's cache, while the user goes on
+    /// saying it; `Spoken::Prefilled` follows.
+    pub fn read_ahead(&self, messages: &[Message], mark: usize) -> Result<()> {
+        self.send_llm(LlmRequest::Prefill { messages: messages.to_vec(), mark: Some(mark) })
     }
 
     /// Starts the model's reply. A `held` reply waits in the gate for `release` or `discard`.
@@ -259,11 +265,12 @@ impl Transport {
 
 #[cfg(test)]
 impl Transport {
-    /// The topics without their routes, for tests that read what the conversation sends.
-    pub(crate) fn without_routes(rt: Handle, stt: Caller) -> Self {
+    /// The topics without their routes, for tests that read what the conversation sends or run routes of their own
+    /// (`cancels` are theirs).
+    pub(crate) fn without_routes(rt: Handle, stt: Caller, cancels: Vec<CancelHandle>) -> Self {
         let routes = rt.block_on(async {
             let (llm, pieces, speech) = (publisher(LLM_IN).await?, publisher(PIECES).await?, publisher(SPEECH).await?);
-            Ok::<_, mq_bridge::anyhow::Error>(Routes { llm, pieces, speech, cancels: Vec::new() })
+            Ok::<_, mq_bridge::anyhow::Error>(Routes { llm, pieces, speech, cancels })
         });
         Self { rt, routes: routes.expect("memory topics"), server_cancel: None, stt: Some(stt), model: None }
     }
@@ -298,7 +305,7 @@ pub fn stop_inbox(rt: &Handle) {
 }
 
 /// The topics live as long as the process: what a stopped agent left in them must not reach the next one.
-fn clear_topics() {
+pub(crate) fn clear_topics() {
     for topic in [INBOX, LLM_IN, PIECES, SPEECH] {
         get_or_create_channel(&MemoryConfig::new(topic, Some(CAPACITY))).drain_messages();
     }
@@ -402,6 +409,6 @@ async fn publisher(topic: &str) -> mq_bridge::anyhow::Result<Publisher> {
     Publisher::new(Endpoint::new_memory(topic, CAPACITY)).await
 }
 
-async fn emitter(topic: &str) -> mq_bridge::anyhow::Result<Arc<dyn MessagePublisher>> {
+pub(crate) async fn emitter(topic: &str) -> mq_bridge::anyhow::Result<Arc<dyn MessagePublisher>> {
     Ok(publisher(topic).await?.inner())
 }

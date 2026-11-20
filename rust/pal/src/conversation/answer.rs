@@ -25,6 +25,8 @@ pub(super) struct Prepared {
     pub(super) stt_ms: u128,
     pub(super) text_at: Instant,
     pub(super) reply: Reply,
+    /// The speech answered, with the carry before it.
+    pub(super) pcm: Vec<f32>,
 }
 
 /// When the user stopped speaking, for a segment that arrived at `at`.
@@ -57,7 +59,16 @@ impl Conversation {
         eprintln!("llm_pal: the room went quiet");
         let canned = talk.iter().rev().find_map(|t| self.persona.quip(t).or_else(|| self.persona.pooled(t)));
         let reply = canned.map_or_else(|| Reply::Model(prompt.clone()), Reply::Canned);
-        Prepared { text: talk.join(" "), line: prompt, early: false, ended: Some(t0), stt_ms: 0, text_at: t0, reply }
+        Prepared {
+            text: talk.join(" "),
+            line: prompt,
+            early: false,
+            ended: Some(t0),
+            stt_ms: 0,
+            text_at: t0,
+            reply,
+            pcm: Vec::new(),
+        }
     }
 
     /// The transcript of the speech and when it was ready; `None` if nothing was understood.
@@ -127,6 +138,6 @@ impl Conversation {
             None => Reply::Model(enrich::prompt_line(&text, &line, self.cfg.language)),
         };
         let ended = (!early).then(|| speech_end(t0, &seg));
-        self.start(Prepared { text, line, early, ended, stt_ms, text_at, reply }, t0, tags_before)
+        self.start(Prepared { text, line, early, ended, stt_ms, text_at, reply, pcm: seg.pcm }, t0, tags_before)
     }
 }

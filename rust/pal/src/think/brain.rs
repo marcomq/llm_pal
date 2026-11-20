@@ -26,7 +26,7 @@ pub const SERVER_CANCEL: &str = "pal.llm.cancel";
 
 enum Job {
     Close,
-    Prefill(Vec<Message>, Sender<()>),
+    Prefill(Vec<Message>, Option<usize>, Sender<()>),
     Reply { messages: Vec<Message>, stop: Arc<AtomicBool>, pieces: Sender<Piece> },
 }
 
@@ -82,8 +82,12 @@ impl Model {
                 for job in rx {
                     match job {
                         Job::Close => break,
-                        Job::Prefill(messages, done) => {
-                            if let Err(e) = session.prefill(&messages) {
+                        Job::Prefill(messages, mark, done) => {
+                            let read = match mark {
+                                Some(mark) => session.read_ahead(&messages, mark),
+                                None => session.prefill(&messages),
+                            };
+                            if let Err(e) = read {
                                 eprintln!("llm_pal: {e}");
                             }
                             let _ = done.send(());
@@ -107,10 +111,11 @@ impl Model {
         self.jobs.send(job).map_err(|_| failed("the model thread ended"))
     }
 
-    /// Returns once the model has read `messages`; a later reply starting with them skips that part.
-    pub(crate) fn prefill(&self, messages: Vec<Message>) -> std::result::Result<(), HandlerError> {
+    /// Returns once the model has read `messages`, the last one only up to byte `mark` if given; a later reply
+    /// starting with them skips that part.
+    pub(crate) fn prefill(&self, messages: Vec<Message>, mark: Option<usize>) -> std::result::Result<(), HandlerError> {
         let (done, wait) = channel();
-        self.send(Job::Prefill(messages, done))?;
+        self.send(Job::Prefill(messages, mark, done))?;
         let _ = wait.recv();
         Ok(())
     }
@@ -181,10 +186,10 @@ pub fn handler(model: Option<Model>, mut server: Option<Server>, report: Report)
     move |msg: CanonicalMessage, ctx: &HandlerContext| {
         trace_received("pal_llm", &msg);
         let (turn, messages) = match LlmRequest::from_message(&msg).map_err(failed)? {
-            LlmRequest::Prefill(messages) => {
+            LlmRequest::Prefill { messages, mark } => {
                 // The server keeps no cache; a fallback model reads everything on its first turn instead.
                 if let (None, Some(model)) = (&server, &model) {
-                    model.prefill(messages)?;
+                    model.prefill(messages, mark)?;
                 }
                 report(Spoken::Prefilled);
                 return Ok(Handled::Ack);

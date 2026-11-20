@@ -24,6 +24,8 @@ mod answer;
 mod barge_in;
 mod follow;
 #[cfg(test)]
+mod perf;
+#[cfg(test)]
 mod tests;
 mod turn;
 mod unfinished;
@@ -288,7 +290,7 @@ fn load(cfg: &AgentConfig, shared: &Shared, persona: &Persona, rt: &Handle) -> R
             let (model, thread) = Model::start(&path, fixed)?;
             took("llm loaded");
             if let Some(context) = warm {
-                model.prefill(context).map_err(|e| Error::Llm(e.to_string()))?;
+                model.prefill(context, None).map_err(|e| Error::Llm(e.to_string()))?;
             }
             Ok((model, thread))
         })

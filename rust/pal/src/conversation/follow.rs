@@ -61,6 +61,9 @@ impl Conversation {
             Input::Event(Event::BargeIn { .. }) if self.cfg.barge_in => self.pause_for_barge_in(),
             // Speech after a barge-in ends the reply; whether its paused voice goes on depends on the words.
             Input::Event(event @ (Event::Pause(_) | Event::Segment(_))) if self.barge.is_some() => {
+                if t.first_audio.is_none() {
+                    return self.go_on(t, event);
+                }
                 self.transport.cancel(&t.id);
                 self.done(t);
                 return self.listening(Some(Input::Event(event)));
@@ -79,10 +82,33 @@ impl Conversation {
                 if let Some(party) = &mut self.party {
                     party.speech();
                 }
+                // The user goes on before the reply is heard: it waits for what they say (`go_on`).
+                if t.first_audio.is_none() && self.barge.is_none() {
+                    self.pause_for_barge_in();
+                }
             }
             Input::Event(_) => {}
         }
         Phase::Replying(t)
+    }
+
+    /// The user went on before the reply was heard. Words make one turn of both: the reply is dropped and the speech
+    /// it answered goes before the new one, transcribed as a whole. No words: after a segment, the reply plays.
+    fn go_on(&mut self, t: Turn, event: Event) -> Phase {
+        let (Event::Pause(seg) | Event::Segment(seg)) = &event else { return Phase::Replying(t) };
+        if !self.transport.transcribe(&seg.pcm).is_ok_and(|text| !text.is_empty()) {
+            if matches!(event, Event::Segment(_)) {
+                self.resume_barged();
+            }
+            return Phase::Replying(t);
+        }
+        if let Err(e) = self.transport.interrupt(&t.id) {
+            eprintln!("llm_pal: {e}");
+        }
+        self.barge = None;
+        self.tags = t.tags_before;
+        self.carry = Some([self.carry.take().unwrap_or_default(), t.p.pcm].concat());
+        self.listening(Some(Input::Event(event)))
     }
 
     /// The speech of a held reply ended at `end`, which arrived at `arrived`: the reply may play. `false` if the

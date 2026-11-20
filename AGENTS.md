@@ -34,14 +34,21 @@ conversation and with it the reply routes, the agent's thread stops the input si
 2. **Events** (`hear/event.rs`): `SpeechStart`, `Pause(Segment)`, `Segment(Segment)`, `Resume`, `BargeIn`, `Lost`, as
    mq-bridge messages. With the reply routes' `Spoken` reports they reach the conversation as `transport::Input`.
 3. **Pause vs. segment**: `Pause` means a short pause; the reply is prepared but held (`early`). `Segment` means the
-   user finished. A held reply is released on the segment's end or discarded if the user goes on.
+   user finished. A held reply is released on the segment's end or discarded if the user goes on; then the local
+   model reads its line up to the last word ahead (`drop_turn` → `Transport::read_ahead`), so the reply to the next
+   pause reads only from there on (`LlmSession::read_ahead`). The segmenter's pause is 300 ms, where Smart Turn
+   may also end the turn. If the user speaks again before the reply is heard, its voice waits (`go_on`): words
+   drop the reply, and its speech (`Prepared.pcm`) goes into `carry`, so one reply answers both; no words: it plays.
 4. **STT**: `Transport::transcribe` → `hear/stt.rs`: Parakeet TDT through the mq-bridge-onnx custom endpoint
    (`task: transcribe`), asked with a `Caller`. No route. It must load
-   before other ONNX models: VAD and Smart Turn share its ONNX Runtime.
+   before other ONNX models: VAD and Smart Turn share its ONNX Runtime. Each `Pause` and each segment is
+   transcribed whole, from the start of the speech (with `carry` before it), never only the new audio: Parakeet on
+   pieces cut at short pauses gets worse (at ≤150 ms a lone "Hallo," became "Hello?", a comma at the cut a full stop;
+   `conversation/perf.rs`, `transcripts_in_pieces`). What is saved when the user goes on is the LLM's reading (3.).
 5. **Unfinished sentence**: `waits_for_more` → `Phase::Unfinished` (or `Turn::ending` for a held reply) for
    `UNFINISHED_WAIT`. If the user goes on, the audio is kept in `carry` and put before the next segment.
-6. **User line**: `Persona::user_line(text, tags)`: prosody tags (`prosody_tags.rs`) + transcript. This line goes
-   into the history and the UI (`AgentEvent::Heard`).
+6. **User line**: `Persona::user_line(text, tags)`: transcript + prosody tags (`prosody_tags.rs`). The tags go
+   last, so a line that grows keeps its start. This line goes into the history and the UI (`AgentEvent::Heard`).
 7. **Canned replies** (no LLM): `persona.joke`, `persona.quip`, `persona.pooled` in `persona.rs`. Texts in
    `think/language/` (`jokes_*.txt`, `pool_*.txt`, `de.rs`, `en.rs`). `pooled` only matches lines negated
    like the transcript.
@@ -97,6 +104,9 @@ Topics, routes and reports: the diagram at the top of `transport.rs`. What it do
   while loading. The local model and its session live on their own thread (`brain::Model`).
 - `local_llm.rs`: `LocalLlm` via llama.cpp (default model Qwen3.5 2B GGUF), `LlmSession::reply`. The model's thread runs
   at nice 10 on Android (`platform::background_thread`); llama.cpp's workers inherit it, so TTS and audio come first.
+  Qwen3.5 has recurrent layers: the cache goes back only to checkpoints (after the fixed messages, the last prefill,
+  the last two read-aheads or prompts). A checkpoint inside a prompt would split its reading into two decodes,
+  ~80 ms more on Metal, so read-aheads make them outside the reply's time.
 - Thread counts for llama.cpp, Pocket TTS (xn), Parakeet and Smart Turn: `cpu::fast_cores()`.
 - `remote_llm.rs`: builds the mq-bridge endpoint: `openai_chat` with `messages_from_payload` for Ollama and OpenAI,
   the streaming `http_bulk` recipe for Anthropic's `/messages`. Both stream to `pal.llm.tokens` (`stream_to`) and
@@ -142,7 +152,8 @@ explicit consent; never add recordings or cloned voices to the repository or the
   speaker are `#[ignore]`d (`reply::` speaks through the speakers and is timing-sensitive).
 - Android test phone: Pixel 6a over adb WLAN, `192.168.20.43:5555`. The phone must be unlocked for start checks.
 - Manual speech checks (desktop and phone) after changes to `conversation/`, `hear/` or `speak/`: a question;
-  a short pause, then the end (held reply plays); a pause, then going on (one reply to the whole); a sentence
+  a short pause, then the end (held reply plays); a pause, then going on (one reply to the whole); a finished
+  question, then more before the reply is heard (one reply to both); a sentence
   ending in "und …", then more; barge-in with words (stops, history cut) and without (a cough: goes on after
   ~1.2 s); a joke; party talk without "KITT", silence, then with "KITT"; an unreachable server (fallback or
   `reply_failed`); the microphone gone (message, no hang).
@@ -160,9 +171,9 @@ explicit consent; never add recordings or cloned voices to the repository or the
 - Module overviews (`lib.rs`, `conversation.rs`, `hear.rs`, `think.rs`, `speak.rs`) show only what happens
   inside the module. Topics, routes and reports between modules are drawn only in `transport.rs`; update that
   diagram with the topology, and point to it elsewhere instead of repeating it.
-- `conversation.rs` + `conversation/` + `transport.rs` stay at most 1450 lines without test code; raise it only
-  with a reason.
-- Speech while a reply runs (no barge-in) is kept as one `pending` segment and answered after it; `Pause`/`Resume`
+- `conversation.rs` + `conversation/` + `transport.rs` stay at most 1475 lines without test code (raised from 1450
+  for `go_on`); raise it only with a reason.
+- Speech while a reply is heard (no barge-in) is kept as one `pending` segment and answered after it; `Pause`/`Resume`
   then are ignored. Waits (`UNFINISHED_WAIT`, `RESUME_AFTER`) are checked per input or tick, up to 20 ms late.
 - `conversation_handler` keeps a `PocketSpeaker` clone only to cut the voice off at the end, as `Route::stop` doesn't
   promise to process queued messages.

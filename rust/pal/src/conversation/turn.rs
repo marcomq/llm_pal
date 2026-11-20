@@ -54,7 +54,7 @@ pub(super) struct Turn {
     pub(super) first_piece: Option<Instant>,
     pub(super) first_sentence: Option<Instant>,
     /// When its first sentence began to play.
-    first_audio: Option<Instant>,
+    pub(super) first_audio: Option<Instant>,
 }
 
 impl Timing {
@@ -221,10 +221,17 @@ impl Conversation {
         }
     }
 
-    /// The turn is dropped unheard: the routes discard it and the prosody tags forget it.
+    /// The turn is dropped unheard: the routes discard it and the prosody tags forget it. If it answered a pause, the
+    /// model reads its line ahead up to the last word, which may change as the user goes on; the rest likely stays.
     pub(super) fn drop_turn(&mut self, t: Turn) -> Phase {
         if let Err(e) = self.transport.discard(&t.id) {
             eprintln!("llm_pal: {e}");
+        }
+        if let (true, Reply::Model(prompt)) = (t.p.early, &t.p.reply) {
+            let mark = prompt.len() - t.p.line.len() + t.p.text.trim_end().rfind(' ').unwrap_or(0);
+            if let Err(e) = self.transport.read_ahead(&self.persona.messages(prompt), mark) {
+                eprintln!("llm_pal: {e}");
+            }
         }
         self.tags = t.tags_before;
         Phase::Listening

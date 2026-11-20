@@ -18,29 +18,39 @@ use crate::hear::event::Features;
 use crate::think::persona::DEFAULT_NAME;
 use crate::transport::{LLM_IN, LlmRequest, PIECES, SPEECH, ToSpeaker};
 
-/// The topics are process-wide, so the tests take turns.
-struct Topics {
-    rt: Runtime,
-    llm: Receiver<CanonicalMessage>,
-    pieces: Receiver<CanonicalMessage>,
-    speech: Receiver<CanonicalMessage>,
-    transcript: Arc<Mutex<String>>,
+/// The topics are process-wide, so the tests take turns, `perf.rs` too: each turn starts on empty topics.
+pub(super) fn take_turn() -> (MutexGuard<'static, ()>, &'static Runtime) {
+    static TURN: Mutex<()> = Mutex::new(());
+    static RT: OnceLock<Runtime> = OnceLock::new();
+    let turn = TURN.lock().unwrap_or_else(PoisonError::into_inner);
+    transport::clear_topics();
+    (turn, RT.get_or_init(|| Runtime::new().unwrap()))
 }
 
-fn topics() -> MutexGuard<'static, Topics> {
-    static TOPICS: OnceLock<Mutex<Topics>> = OnceLock::new();
-    let t = TOPICS
-        .get_or_init(|| {
-            let rt = Runtime::new().unwrap();
-            let (llm, pieces, speech) = (collect(&rt, LLM_IN), collect(&rt, PIECES), collect(&rt, SPEECH));
-            Mutex::new(Topics { rt, llm, pieces, speech, transcript: Arc::default() })
-        })
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner);
-    for rx in [&t.llm, &t.pieces, &t.speech] {
-        while rx.try_recv().is_ok() {}
+/// What the conversation sends, collected per topic until it is dropped.
+struct Topics {
+    rt: &'static Runtime,
+    llm: Receiver<CanonicalMessage>,
+    _pieces: Receiver<CanonicalMessage>,
+    speech: Receiver<CanonicalMessage>,
+    transcript: Arc<Mutex<String>>,
+    _turn: MutexGuard<'static, ()>,
+}
+
+fn topics() -> Topics {
+    let (turn, rt) = take_turn();
+    let (llm, pieces, speech) = (collect(rt, LLM_IN), collect(rt, PIECES), collect(rt, SPEECH));
+    Topics { rt, llm, _pieces: pieces, speech, transcript: Arc::default(), _turn: turn }
+}
+
+impl Drop for Topics {
+    fn drop(&mut self) {
+        self.rt.block_on(async {
+            for topic in [LLM_IN, PIECES, SPEECH] {
+                Route::stop(&format!("test_{topic}")).await;
+            }
+        });
     }
-    t
 }
 
 fn collect(rt: &Runtime, topic: &str) -> Receiver<CanonicalMessage> {
@@ -79,7 +89,7 @@ fn pal(t: &Topics, barge_in: bool) -> (Conversation, Receiver<AgentEvent>) {
     };
     let persona = Persona::kitt(cfg.language, &cfg.user_name);
     let (tx, events) = channel();
-    let transport = Transport::without_routes(t.rt.handle().clone(), stt);
+    let transport = Transport::without_routes(t.rt.handle().clone(), stt, Vec::new());
     let mut c = Conversation::new(cfg, Arc::default(), tx, transport, MicLink::new(None), persona, Instant::now());
     c.phase = Phase::Listening;
     (c, events)
@@ -116,7 +126,7 @@ fn nothing(rx: &Receiver<CanonicalMessage>) {
 fn reply_of(msg: CanonicalMessage) -> String {
     match LlmRequest::from_message(&msg).unwrap() {
         LlmRequest::Reply { turn, .. } => turn,
-        LlmRequest::Prefill(_) => panic!("a prefill, not a reply"),
+        LlmRequest::Prefill { .. } => panic!("a prefill, not a reply"),
     }
 }
 
@@ -140,7 +150,7 @@ fn a_segment_is_answered_and_its_reply_followed_until_done() {
     report(&mut c, Spoken::Audible { turn: "turn-1".into(), at: Instant::now() });
     report(&mut c, Spoken::Done { turn: "turn-1".into() });
     assert!(matches!(c.phase, Phase::Listening));
-    assert!(matches!(LlmRequest::from_message(&next(&t.llm)).unwrap(), LlmRequest::Prefill(_)));
+    assert!(matches!(LlmRequest::from_message(&next(&t.llm)).unwrap(), LlmRequest::Prefill { .. }));
     report(&mut c, Spoken::Quiet);
     assert_eq!(c.shared.state.load(Ordering::Relaxed), State::Listening as u8);
 
@@ -175,6 +185,13 @@ fn a_held_reply_is_dropped_when_the_user_goes_on() {
     c.handle(Some(Input::Event(Event::Resume))).unwrap();
     assert_eq!(to_speaker(&t.speech), ("turn-1".into(), ToSpeaker::Discard));
     assert!(matches!(c.phase, Phase::Listening));
+
+    assert_eq!(reply_of(next(&t.llm)), "turn-1");
+    let LlmRequest::Prefill { messages, mark: Some(mark) } = LlmRequest::from_message(&next(&t.llm)).unwrap() else {
+        panic!("a read-ahead");
+    };
+    let line = &messages.last().expect("the user's line").content;
+    assert_eq!(&line[..mark], "Erzähl mir etwas über Vulkane in", "up to the last word, which may still change");
 }
 
 #[test]
@@ -230,6 +247,28 @@ fn words_after_a_barge_in_stop_the_last_reply() {
 }
 
 #[test]
+fn going_on_before_the_reply_is_heard_answers_both_at_once() {
+    let t = topics();
+    let (mut c, _events) = pal(&t, false);
+    say(&t, &mut c, QUESTION, Event::Segment, true);
+    assert_eq!(reply_of(next(&t.llm)), "turn-1");
+    c.handle(Some(Input::Event(Event::SpeechStart { at_ms: 0 }))).unwrap();
+    assert_eq!(to_speaker(&t.speech).1, ToSpeaker::Pause);
+
+    say(&t, &mut c, "", Event::Segment, true);
+    assert_eq!(to_speaker(&t.speech).1, ToSpeaker::Resume, "no words: the reply plays");
+    assert!(matches!(&c.phase, Phase::Replying(r) if r.id == "turn-1"));
+
+    c.handle(Some(Input::Event(Event::SpeechStart { at_ms: 0 }))).unwrap();
+    assert_eq!(to_speaker(&t.speech).1, ToSpeaker::Pause);
+    say(&t, &mut c, "Und was ist mit Hekla?", Event::Segment, true);
+    assert_eq!(to_speaker(&t.speech), ("turn-1".into(), ToSpeaker::Stop));
+    assert_eq!(reply_of(next(&t.llm)), "turn-2");
+    assert!(matches!(&c.phase, Phase::Replying(r) if r.p.pcm.len() == 2 * 1600), "both speeches in one");
+    assert!(c.carry.is_none());
+}
+
+#[test]
 fn speech_over_the_voice_does_not_spoil_a_pending_question() {
     let t = topics();
     let (mut c, events) = pal(&t, false);
@@ -241,7 +280,7 @@ fn speech_over_the_voice_does_not_spoil_a_pending_question() {
     assert!(events.try_iter().any(|e| matches!(e, AgentEvent::Ignored)));
 
     report(&mut c, Spoken::Done { turn: "turn-1".into() });
-    assert!(matches!(LlmRequest::from_message(&next(&t.llm)).unwrap(), LlmRequest::Prefill(_)));
+    assert!(matches!(LlmRequest::from_message(&next(&t.llm)).unwrap(), LlmRequest::Prefill { .. }));
     assert_eq!(reply_of(next(&t.llm)), "turn-2");
 }
 
