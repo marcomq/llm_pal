@@ -32,6 +32,9 @@ pub enum Error {
     Routes(String),
     #[error("download: {0}")]
     Download(String),
+    /// `Agent::stop` came during loading.
+    #[error("stopped")]
+    Stopped,
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

@@ -105,7 +105,7 @@ func _start() -> void:
 	pal.barge_in = OS.get_environment("PAL_BARGE_IN") != "0"
 	pal.user_name = Settings.user_name(_cfg)
 	pal.party_mode = _party
-	pal.pocket_voice = Settings.voice(_cfg, _lang)
+	pal.pocket_voice = Settings.voice(_cfg, _lang, _model_dir())
 	pal.llm_provider = Settings.provider(_cfg)
 	pal.llm_url = Settings.url(_cfg)
 	pal.llm_remote_model = Settings.model(_cfg)
@@ -210,7 +210,7 @@ func _switch_language() -> void:
 
 
 func _open_settings() -> void:
-	_settings = Settings.new(_cfg, SETTINGS_PATH, _lang)
+	_settings = Settings.new(_cfg, SETTINGS_PATH, _lang, _model_dir())
 	_settings.saved.connect(_restart)
 	add_child(_settings)
 	_settings.open()

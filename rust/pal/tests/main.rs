@@ -50,7 +50,7 @@ fn segments() -> Vec<Segment> {
 #[test]
 #[ignore = "downloads several GB"]
 fn download_models() {
-    pal::downloader::ensure(&models(), &pal::downloader::all_files()).unwrap();
+    pal::downloader::ensure(&models(), &pal::downloader::all_files(), &Default::default()).unwrap();
 }
 
 mod speech {

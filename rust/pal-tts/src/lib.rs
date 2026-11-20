@@ -52,4 +52,9 @@ impl PocketTts {
     ) -> Result<()> {
         self.model.generate_audio_stream(&self.voice, text, defaults::MAX_TOKEN_PER_CHUNK, None, stop, on_audio)
     }
+
+    /// Writes the voice, e.g. one cloned from an audio file given to `load`, as a `.safetensors` state.
+    pub fn export_voice(&self, path: &std::path::Path) -> Result<()> {
+        self.voice.export(path)
+    }
 }

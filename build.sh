@@ -6,6 +6,7 @@ cd "$(dirname "$0")"
 GODOT="${GODOT:-godot}"
 NDK="${ANDROID_NDK_HOME:-/opt/homebrew/share/android-commandlinetools/ndk/29.0.14206865}"
 APK=build/llm_pal.apk
+PHONE_MODELS=/storage/emulated/0/Android/data/io.github.marcomq.llmpal/files/models
 
 # Godot extension for macOS, then start the app.
 run_godot() {
@@ -39,6 +40,9 @@ case "${1:-}" in
     test) (cd rust && cargo test --release --workspace -- --include-ignored --skip reply:: --skip download_models) ;;
     godot) run_godot ;;
     android) build_android ;;
-    install) build_android && adb install -r "$APK" ;;
+    # Own voices (e.g. kitt) are never downloaded, so they go onto the phone here.
+    install) build_android && adb install -r "$APK" \
+        && if [ -d models/pocket/voices ]; then adb shell mkdir -p "$PHONE_MODELS/pocket" \
+            && adb push models/pocket/voices "$PHONE_MODELS/pocket/"; fi ;;
     *) echo "usage: $0 setup | test | godot | android | install" >&2; exit 1 ;;
 esac

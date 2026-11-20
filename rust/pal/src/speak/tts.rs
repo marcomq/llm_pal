@@ -34,7 +34,8 @@ pub struct PocketSpeaker {
 }
 
 impl PocketSpeaker {
-    /// `voice` is a Pocket TTS catalog name such as "juergen". Blocks until the model is loaded.
+    /// `voice` is a Pocket TTS catalog name such as "juergen" or a `.safetensors` voice file. Blocks until the
+    /// model is loaded.
     pub fn new(voice: &str, language: Language) -> Result<Self> {
         xn::set_num_threads(crate::cpu::fast_cores());
         let tts = PocketTts::load(language.profile().pocket_model, voice)

@@ -61,7 +61,9 @@ Pal says a quip or pool reply to one of its lines, or else the model comments on
 - **Reply routes** (`transport.rs`, `Transport`; handlers in `think/brain.rs` and `speak/stages.rs`): in-process `memory` endpoints
   `pal.llm` → `pal.pieces` → `pal.speech`, routes `pal_llm` (model), `pal_split` (sentence split, `sentences.rs`),
   `pal_speak` (gate and speaker). Each stage is a `ThreadedHandler` on its own thread. Every message carries its turn
-  id; `interrupt`/`discard` cancel a turn in all stages. `canned` sends a fixed text through the same path.
+  id; `interrupt`/`discard` cancel a turn in all stages. One type per topic in `transport/messages.rs`
+  (`LlmRequest`, `Token`, `ToSpeaker`): data carries the turn in `correlation_id` (a cancel skips it), control
+  messages (`Hold`/`Release`/`Discard`/`Stop`) under `turn` (never skipped). `canned` sends a fixed text through the same path.
 - **Tokens** on `pal.pieces` use mq-bridge's `stream_to` format for every source (server, local model, canned):
   `correlation_id` = turn, `mqb.stream.index`, `mqb.stream.end`; the last token's `mqb.stream.status` is
   `complete`, `error` (payload = error text) or `cancelled`.

@@ -115,8 +115,9 @@ impl Agent {
         let sh = shared.clone();
         let worker = std::thread::spawn(move || {
             let send = |e| drop(tx.send(e));
-            if let Err(e) = Conversation::load(&cfg, &sh, &send).and_then(|mut c| c.run()) {
-                send(AgentEvent::Failed(e.to_string()));
+            match Conversation::load(&cfg, &sh, &send).and_then(|mut c| c.run()) {
+                Ok(()) | Err(Error::Stopped) => {}
+                Err(e) => send(AgentEvent::Failed(e.to_string())),
             }
             sh.set(State::Stopped);
         });
@@ -305,14 +306,16 @@ impl<'a> Conversation<'a> {
     fn load(cfg: &'a AgentConfig, shared: &'a Shared, send: &'a dyn Fn(AgentEvent)) -> Result<Self> {
         let dir = &cfg.model_dir;
         let local = cfg.remote.is_none() || cfg.fallback;
+        let pocket_files = downloader::pocket_files(cfg.language, &cfg.voice);
+        let voice_file = dir.join(pocket_files.last().expect("pocket_files ends with the voice"));
         let files = [
             vec!["silero_vad.onnx".to_string()],
             if cfg.smart_turn { vec!["smart-turn-v3.2-cpu.onnx".into()] } else { vec![] },
             downloader::stt_files(&cfg.stt_model),
-            downloader::pocket_files(cfg.language.profile().pocket_model, &cfg.voice),
+            pocket_files.clone(),
             if local { vec![cfg.llm_model.clone()] } else { vec![] },
         ];
-        downloader::ensure(dir, &files.concat())?;
+        downloader::ensure(dir, &files.concat(), &shared.quit)?;
         tts::use_local_files(dir);
 
         let t0 = Instant::now();
@@ -327,7 +330,7 @@ impl<'a> Conversation<'a> {
             }
         });
         let pocket = std::thread::spawn({
-            let (voice, language) = (cfg.voice.clone(), cfg.language);
+            let (voice, language) = (voice_file.to_string_lossy().into_owned(), cfg.language);
             move || {
                 let speaker = PocketSpeaker::new(&voice, language)?;
                 took("voice ready");
@@ -343,7 +346,7 @@ impl<'a> Conversation<'a> {
         let (speaker_tx, speaker_rx) = channel();
         let mut transport =
             Transport::start(rt.handle().clone(), brain, persona.fixed_messages(), speaker_rx, cfg.language)?;
-        took("llm loaded");
+        took(if local { "llm loaded" } else { "llm routes ready" });
         transport.prefill(&persona.context())?;
         let stt = joined(stt, Error::Stt)?;
         let speaker = joined(pocket, Error::Tts)?;
@@ -351,9 +354,10 @@ impl<'a> Conversation<'a> {
         let _ = shared.output.set(speaker.output());
         // Waits until the first prompt, which is slow, has left the system prompt in the LLM's cache.
         loop {
-            match transport.next(Duration::from_secs(3600)) {
+            match transport.next(POLL) {
                 Some(Input::Spoken(Spoken::Prefilled)) => break,
                 Some(Input::Spoken(Spoken::Failed { error, .. })) => return Err(Error::Llm(error)),
+                _ if shared.quit.load(Ordering::SeqCst) => return Err(Error::Stopped),
                 _ => {}
             }
         }
@@ -405,6 +409,9 @@ impl<'a> Conversation<'a> {
 
     fn run(&mut self) -> Result<()> {
         while !self.quit() {
+            if self.transport.mic_lost() {
+                return Err(Error::Audio("the microphone stopped".into()));
+            }
             if self.timing.is_some()
                 && let Some(audio) = self.speaker.take_audio_start()
                 && let Some(t) = self.timing.take()

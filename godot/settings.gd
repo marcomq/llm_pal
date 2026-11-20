@@ -8,7 +8,8 @@ signal saved
 const PROVIDERS := ["local", "ollama", "openai", "anthropic"]
 const PROVIDER_NAMES := ["llama (lokal)", "Ollama", "OpenAI", "Anthropic"]
 const DEFAULT_NAME := "Michael"
-## Pocket TTS catalog voices; `downloader.rs` lists the same voices. The first is the default.
+## Pocket TTS catalog voices; `downloader.rs` lists the same voices. The first is the default. Voices of one's
+## own are `.safetensors` files in `<model dir>/pocket/voices/<lang>/`, e.g. cloned with pal-tts.
 const VOICES := ["juergen", "stuart_bell", "michael"]
 const VOICE_NAMES := ["Jürgen", "Stuart Bell", "Michael"]
 const LANGUAGES := ["de", "en"]
@@ -34,6 +35,7 @@ var _path: String
 var _texts: Dictionary
 var _name := LineEdit.new()
 var _voices := {"de": OptionButton.new(), "en": OptionButton.new()}
+var _voice_lists := {}
 var _provider := OptionButton.new()
 var _url := LineEdit.new()
 var _model := LineEdit.new()
@@ -51,10 +53,19 @@ static func user_name(cfg: ConfigFile) -> String:
 	return n.strip_edges() if not n.strip_edges().is_empty() else DEFAULT_NAME
 
 
+## The catalog voices and those of one's own for `lang`.
+static func voices(model_dir: String, lang: String) -> Array:
+	var own := model_dir.path_join("pocket/voices").path_join(lang)
+	if not DirAccess.dir_exists_absolute(own):
+		return VOICES
+	var found := Array(DirAccess.get_files_at(own)).filter(func(f: String) -> bool: return f.ends_with(".safetensors"))
+	return VOICES + found.map(func(f: String) -> String: return f.get_basename())
+
+
 ## The saved voice for `lang`, or the default if none or an unknown one is saved.
-static func voice(cfg: ConfigFile, lang: String) -> String:
+static func voice(cfg: ConfigFile, lang: String, model_dir: String) -> String:
 	var v: String = cfg.get_value("voice", lang, VOICES[0])
-	return v if v in VOICES else VOICES[0]
+	return v if v in voices(model_dir, lang) else VOICES[0]
 
 
 static func url(cfg: ConfigFile) -> String:
@@ -66,8 +77,10 @@ static func model(cfg: ConfigFile) -> String:
 	return m if not m.is_empty() else DEFAULT_MODELS.get(provider(cfg), "")
 
 
-func _init(cfg: ConfigFile, path: String, lang: String) -> void:
+func _init(cfg: ConfigFile, path: String, lang: String, model_dir: String) -> void:
 	_cfg = cfg
+	for voice_lang in LANGUAGES:
+		_voice_lists[voice_lang] = voices(model_dir, voice_lang)
 	_path = path
 	_texts = TEXTS[lang]
 	visible = false
@@ -92,8 +105,9 @@ func _init(cfg: ConfigFile, path: String, lang: String) -> void:
 	_field(form, "name", _name)
 	_name.placeholder_text = DEFAULT_NAME
 	for voice_lang in LANGUAGES:
-		for i in VOICES.size():
-			_voices[voice_lang].add_item(VOICE_NAMES[i], i)
+		var list: Array = _voice_lists[voice_lang]
+		for i in list.size():
+			_voices[voice_lang].add_item(VOICE_NAMES[i] if i < VOICE_NAMES.size() else list[i].capitalize(), i)
 		_field(form, "voice_" + voice_lang, _voices[voice_lang])
 	for i in PROVIDERS.size():
 		_provider.add_item(PROVIDER_NAMES[i], i)
@@ -140,7 +154,8 @@ func _field(form: VBoxContainer, key: String, input: Control) -> Control:
 func open() -> void:
 	_name.text = _cfg.get_value("user", "name", "")
 	for lang in LANGUAGES:
-		_voices[lang].select(VOICES.find(voice(_cfg, lang)))
+		var v: String = _cfg.get_value("voice", lang, VOICES[0])
+		_voices[lang].select(maxi(_voice_lists[lang].find(v), 0))
 	_provider.select(maxi(PROVIDERS.find(provider(_cfg)), 0))
 	_url.text = url(_cfg)
 	_model.text = _cfg.get_value("llm", "model", "")
@@ -161,7 +176,7 @@ func _show_provider() -> void:
 func _save() -> void:
 	_cfg.set_value("user", "name", _name.text.strip_edges())
 	for lang in LANGUAGES:
-		_cfg.set_value("voice", lang, VOICES[_voices[lang].selected])
+		_cfg.set_value("voice", lang, _voice_lists[lang][_voices[lang].selected])
 	_cfg.set_value("llm", "provider", PROVIDERS[_provider.selected])
 	_cfg.set_value("llm", "url", _url.text.strip_edges())
 	_cfg.set_value("llm", "model", _model.text.strip_edges())

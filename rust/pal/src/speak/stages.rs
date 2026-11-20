@@ -9,8 +9,7 @@ use mq_bridge::{CanonicalMessage, Handled};
 use crate::speak::sentences::Sentences;
 use crate::speak::tts::PocketSpeaker;
 use crate::think::language::Language;
-use crate::transport::{COMPLETE, CORRELATION_ID, FAILED, KIND, Report, STREAM_END, STREAM_STATUS, Spoken, TURN};
-use crate::transport::{meta, turn_message};
+use crate::transport::{End, Report, Spoken, ToSpeaker, Token};
 
 /// Numbers as words, and words the voice reads wrong respelled.
 fn pronounced(text: &str, language: Language) -> String {
@@ -22,25 +21,24 @@ pub fn split(language: Language, report: Report) -> impl BlockingHandler {
     let mut sentences = Sentences::new(language);
     let mut current = String::new();
     move |msg: CanonicalMessage, ctx: &HandlerContext| {
-        let turn = meta(&msg, CORRELATION_ID);
+        let token = Token::from_message(&msg);
         // A cancelled turn ends without its last sentence, which is dropped here.
-        if turn != current {
+        if token.turn != current {
             sentences = Sentences::new(language);
-            current = turn.to_string();
+            current = token.turn.clone();
             report(Spoken::FirstPiece { turn: current.clone(), at: Instant::now() });
         }
-        let text = msg.get_payload_str();
-        let (out, last) = match (meta(&msg, STREAM_END), meta(&msg, STREAM_STATUS)) {
-            ("true", COMPLETE) => (sentences.finish().into_iter().collect(), Some(turn_message("end", turn, ""))),
-            ("true", FAILED) => (Vec::new(), Some(turn_message("error", turn, &text))),
-            ("true", _) => (Vec::new(), None),
-            _ => (sentences.push(&text), None),
+        let (out, last) = match token.end {
+            Some(End::Complete) => (sentences.finish().into_iter().collect(), Some(ToSpeaker::End)),
+            Some(End::Failed) => (Vec::new(), Some(ToSpeaker::Error(token.text))),
+            Some(End::Cancelled) => (Vec::new(), None),
+            None => (sentences.push(&token.text), None),
         };
         for s in out {
-            ctx.emit(turn_message("sentence", turn, &s))?;
+            ctx.emit(ToSpeaker::Sentence(s).to_message(&current))?;
         }
         if let Some(last) = last {
-            ctx.emit(last)?;
+            ctx.emit(last.to_message(&current))?;
         }
         Ok(Handled::Ack)
     }
@@ -58,7 +56,10 @@ pub fn speak(speaker: Receiver<PocketSpeaker>, language: Language, report: Repor
     let mut held: Option<Held> = None;
     let mut ready: Option<PocketSpeaker> = None;
     move |msg: CanonicalMessage, ctx: &HandlerContext| {
-        let turn = meta(&msg, TURN);
+        let Some((turn, what)) = ToSpeaker::from_message(&msg) else {
+            return Ok(Handled::Ack);
+        };
+        let turn = turn.as_str();
         if ready.is_none() {
             ready = speaker.recv().ok();
         }
@@ -73,29 +74,29 @@ pub fn speak(speaker: Receiver<PocketSpeaker>, language: Language, report: Repor
             report(Spoken::Said { turn: turn.to_string(), text, at: Instant::now() });
         };
         let holding = held.as_ref().is_some_and(|h| h.turn == turn);
-        match meta(&msg, KIND) {
-            "hold" => held = Some(Held { turn: turn.to_string(), sentences: Vec::new(), done: false }),
-            "release" if holding => {
+        match what {
+            ToSpeaker::Hold => held = Some(Held { turn: turn.to_string(), sentences: Vec::new(), done: false }),
+            ToSpeaker::Release if holding => {
                 let h = held.take().expect("holding");
                 h.sentences.into_iter().for_each(&mut say);
                 if h.done {
                     report(Spoken::Done { turn: h.turn });
                 }
             }
-            "discard" if holding => held = None,
-            "stop" => speaker.stop(),
-            "sentence" if ctx.is_cancelled() => {}
-            "sentence" if holding => held.as_mut().expect("holding").sentences.push(msg.get_payload_str().into()),
-            "sentence" => say(msg.get_payload_str().into()),
-            "end" if holding => held.as_mut().expect("holding").done = true,
-            "end" => report(Spoken::Done { turn: turn.to_string() }),
-            "error" => {
+            ToSpeaker::Discard if holding => held = None,
+            ToSpeaker::Release | ToSpeaker::Discard => {}
+            ToSpeaker::Stop => speaker.stop(),
+            ToSpeaker::Sentence(_) if ctx.is_cancelled() => {}
+            ToSpeaker::Sentence(text) if holding => held.as_mut().expect("holding").sentences.push(text),
+            ToSpeaker::Sentence(text) => say(text),
+            ToSpeaker::End if holding => held.as_mut().expect("holding").done = true,
+            ToSpeaker::End => report(Spoken::Done { turn: turn.to_string() }),
+            ToSpeaker::Error(error) => {
                 if holding {
                     held = None;
                 }
-                report(Spoken::Failed { turn: turn.to_string(), error: msg.get_payload_str().into() });
+                report(Spoken::Failed { turn: turn.to_string(), error });
             }
-            _ => {}
         }
         Ok(Handled::Ack)
     }

@@ -16,10 +16,7 @@ use mq_bridge::{CanonicalMessage, Handled, HandlerError, Publisher};
 
 use crate::think::llm::{LlmConfig, LocalLlm, Message};
 use crate::think::remote::RemoteConfig;
-use crate::transport::{
-    CANCELLED, COMPLETE, CORRELATION_ID, FAILED, KIND, Report, STREAM_END, STREAM_INDEX, STREAM_STATUS, Spoken, TURN,
-    failed, meta, token,
-};
+use crate::transport::{CORRELATION_ID, End, LlmRequest, Report, Spoken, Token, failed};
 use crate::{Error, Result};
 
 /// How often a running reply checks whether its turn was cancelled.
@@ -143,7 +140,7 @@ impl Model {
                     stop.store(true, Ordering::Relaxed);
                 }
                 Ok(Piece::Text(piece)) => {
-                    sent = ctx.emit(token(turn, index, &piece, None));
+                    sent = ctx.emit(Token::piece(turn, index, &piece).to_message());
                     index += 1;
                 }
                 Ok(Piece::Done(replied)) => break replied,
@@ -153,11 +150,11 @@ impl Model {
         };
         sent?;
         let last = match replied {
-            _ if ctx.is_cancelled() => token(turn, index, "", Some(CANCELLED)),
-            Ok(_) => token(turn, index, "", Some(COMPLETE)),
-            Err(e) => token(turn, index, &e.to_string(), Some(FAILED)),
+            _ if ctx.is_cancelled() => Token::last(turn, index, End::Cancelled, ""),
+            Ok(_) => Token::last(turn, index, End::Complete, ""),
+            Err(e) => Token::last(turn, index, End::Failed, &e.to_string()),
         };
-        ctx.emit(last)?;
+        ctx.emit(last.to_message())?;
         Ok(Handled::Ack)
     }
 }
@@ -176,7 +173,7 @@ impl Server {
         let endpoint = config.endpoint(&tokens, &Endpoint::new_memory(SERVER_CANCEL, CAPACITY))?;
         Ok(Self {
             chat: Publisher::new(endpoint).await?,
-            tokens: create_consumer_from_route("pal_llm", &tokens).await?,
+            tokens: create_consumer_from_route("pal_llm_server", &tokens).await?,
             runtime: tokio::runtime::Handle::current(),
             config,
         })
@@ -188,7 +185,7 @@ impl Server {
         turn: &str,
         messages: &[Message],
         ctx: &HandlerContext,
-    ) -> std::result::Result<CanonicalMessage, HandlerError> {
+    ) -> std::result::Result<Token, HandlerError> {
         let request = CanonicalMessage::from(self.config.payload(messages)).with_metadata_kv(CORRELATION_ID, turn);
         let chat = self.chat.clone();
         // The answer is the whole text again; the tokens already carry it. It only tells of a request that died.
@@ -208,18 +205,18 @@ impl Server {
             })?;
             let received = match received {
                 Ok(received) => received,
-                Err(error) => return Ok(token(turn, index, &error, Some(FAILED))),
+                Err(error) => return Ok(Token::last(turn, index, End::Failed, &error)),
             };
             let _ = self.runtime.block_on((received.commit)(MessageDisposition::Ack));
-            let token = received.message;
+            let token = Token::from_message(&received.message);
             // The rest of an earlier reply whose forwarding failed.
-            if meta(&token, CORRELATION_ID) != turn {
+            if token.turn != turn {
                 continue;
             }
-            if meta(&token, STREAM_END) == "true" {
+            if token.end.is_some() {
                 return Ok(token);
             }
-            ctx.emit(token)?;
+            ctx.emit(received.message)?;
             index += 1;
         }
     }
@@ -228,31 +225,30 @@ impl Server {
 /// The `pal_llm` stage: messages in, tokens out. Reports `Prefilled` after each prefill.
 pub fn stage(model: Option<Model>, mut server: Option<Server>, report: Report) -> impl BlockingHandler {
     move |msg: CanonicalMessage, ctx: &HandlerContext| {
-        let (kind, turn) = (meta(&msg, KIND), meta(&msg, TURN));
-        let messages: Vec<Message> = serde_json::from_slice(&msg.payload).map_err(failed)?;
-        if let Some(server) = server.as_mut() {
-            // The server keeps no cache; a fallback model reads everything on its first turn instead.
-            if kind == "prefill" {
+        let (turn, messages) = match LlmRequest::from_message(&msg).map_err(failed)? {
+            LlmRequest::Prefill(messages) => {
+                // The server keeps no cache; a fallback model reads everything on its first turn instead.
+                if let (None, Some(model)) = (&server, &model) {
+                    model.prefill(messages)?;
+                }
                 report(Spoken::Prefilled);
                 return Ok(Handled::Ack);
             }
-            let last = server.reply(turn, &messages, ctx)?;
-            let unanswered = meta(&last, STREAM_STATUS) == FAILED && meta(&last, STREAM_INDEX) == "0";
+            LlmRequest::Reply { turn, messages } => (turn, messages),
+        };
+        if let Some(server) = server.as_mut() {
+            let last = server.reply(&turn, &messages, ctx)?;
+            let unanswered = last.end == Some(End::Failed) && last.index == 0;
             if !(unanswered && model.is_some() && !ctx.is_cancelled()) {
-                ctx.emit(last)?;
+                ctx.emit(last.to_message())?;
                 return Ok(Handled::Ack);
             }
-            eprintln!("llm_pal: {}; the local model answers", last.get_payload_str());
+            eprintln!("llm_pal: {}; the local model answers", last.text);
         }
         let Some(model) = &model else {
-            ctx.emit(token(turn, 0, "no model", Some(FAILED)))?;
+            ctx.emit(Token::last(&turn, 0, End::Failed, "no model").to_message())?;
             return Ok(Handled::Ack);
         };
-        if kind == "prefill" {
-            model.prefill(messages)?;
-            report(Spoken::Prefilled);
-            return Ok(Handled::Ack);
-        }
-        model.reply(turn, messages, ctx)
+        model.reply(&turn, messages, ctx)
     }
 }

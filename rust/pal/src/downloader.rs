@@ -4,20 +4,25 @@
 use std::fs::File;
 use std::io::{Read, Write};
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 use sha2::{Digest, Sha256};
 
+use crate::think::language::Language;
 use crate::{Error, Result};
 
 const HF: &str = "https://huggingface.co";
 const POCKET: &str = "pocket/kyutai/pocket-tts-without-voice-cloning";
+/// A server that sends nothing this long ends the download; a slow but steady one doesn't.
+const STALL: Duration = Duration::from_secs(30);
 
 /// Path in the model folder, URL, sha256.
 type Entry = (&'static str, &'static str, &'static str);
 
 const SILERO: Entry = (
     "silero_vad.onnx",
-    "https://github.com/snakers4/silero-vad/raw/master/src/silero_vad/data/silero_vad.onnx",
+    "https://github.com/snakers4/silero-vad/raw/bfdc0193023f121ea5b3cc7b176dbed570a68a59/src/silero_vad/data/silero_vad.onnx",
     "1a153a22f4509e292a94e67d6f9b85e8deb25b4988682b7e174c65279d8788e3",
 );
 
@@ -47,12 +52,12 @@ const CATALOG: &[Entry] = &[
     ),
     (
         "Qwen3.5-2B-Q4_K_M.gguf",
-        "unsloth/Qwen3.5-2B-GGUF/resolve/main/Qwen3.5-2B-Q4_K_M.gguf",
+        "unsloth/Qwen3.5-2B-GGUF/resolve/f6d5376be1edb4d416d56da11e5397a961aca8ae/Qwen3.5-2B-Q4_K_M.gguf",
         "aaf42c8b7c3cab2bf3d69c355048d4a0ee9973d48f16c731c0520ee914699223",
     ),
     (
         "Qwen3.5-0.8B-Q4_K_M.gguf",
-        "unsloth/Qwen3.5-0.8B-GGUF/resolve/main/Qwen3.5-0.8B-Q4_K_M.gguf",
+        "unsloth/Qwen3.5-0.8B-GGUF/resolve/6ab461498e2023f6e3c1baea90a8f0fe38ab64d0/Qwen3.5-0.8B-Q4_K_M.gguf",
         "bd258782e35f7f458f8aced1adc053e6e92e89bc735ba3be89d38a06121dc517",
     ),
     (
@@ -113,14 +118,17 @@ pub fn stt_files(folder: &str) -> Vec<String> {
     CATALOG.iter().filter_map(|(path, ..)| path.strip_prefix(&prefix).map(|_| path.to_string())).collect()
 }
 
-/// Pocket TTS files of a language (`Profile::pocket_model`) and voice.
-pub fn pocket_files(language: &str, voice: &str) -> Vec<String> {
-    let dir = format!("{POCKET}/languages/{language}");
-    vec![
-        format!("{dir}/model.safetensors"),
-        format!("{dir}/tokenizer.json"),
-        format!("{dir}/embeddings/{voice}.safetensors"),
-    ]
+/// Pocket TTS files of `language` and `voice`; the last one is the voice. A voice outside the catalog is
+/// one's own, e.g. cloned with pal-tts, in `pocket/voices/<code>/<voice>.safetensors`; it is never downloaded.
+pub fn pocket_files(language: Language, voice: &str) -> Vec<String> {
+    let dir = format!("{POCKET}/languages/{}", language.profile().pocket_model);
+    let catalog = format!("{dir}/embeddings/{voice}.safetensors");
+    let voice = if CATALOG.iter().any(|(path, ..)| *path == catalog) {
+        catalog
+    } else {
+        format!("pocket/voices/{}/{voice}.safetensors", language.code())
+    };
+    vec![format!("{dir}/model.safetensors"), format!("{dir}/tokenizer.json"), voice]
 }
 
 /// Every file in the catalog, e.g. for `build.sh setup`.
@@ -129,7 +137,14 @@ pub fn all_files() -> Vec<String> {
 }
 
 /// Downloads each of `files` (paths in `dir`) that is missing. A file not in the catalog must be there already.
-pub fn ensure(dir: &Path, files: &[String]) -> Result<()> {
+/// Setting `stop` ends it within a read.
+pub fn ensure(dir: &Path, files: &[String], stop: &AtomicBool) -> Result<()> {
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .timeout_connect(Some(STALL))
+        .timeout_recv_response(Some(STALL))
+        .timeout_per_read(Some(STALL))
+        .build()
+        .into();
     for name in files {
         let path = dir.join(name);
         if path.exists() {
@@ -140,22 +155,39 @@ pub fn ensure(dir: &Path, files: &[String]) -> Result<()> {
         };
         let url = if url.starts_with("https://") { url.to_string() } else { format!("{HF}/{url}") };
         eprintln!("llm_pal: downloading {name}");
-        download(&url, &path, sha256).map_err(|e| Error::Download(format!("{name}: {e}")))?;
+        if let Err(e) = download(&agent, &url, &path, sha256, stop) {
+            return Err(if stop.load(Ordering::Relaxed) {
+                Error::Stopped
+            } else {
+                Error::Download(format!("{name}: {e}"))
+            });
+        }
         eprintln!("llm_pal: downloaded {name}");
     }
     Ok(())
 }
 
-fn download(url: &str, path: &Path, sha256: &str) -> std::result::Result<(), Box<dyn std::error::Error>> {
+fn download(
+    agent: &ureq::Agent,
+    url: &str,
+    path: &Path,
+    sha256: &str,
+    stop: &AtomicBool,
+) -> std::result::Result<(), Box<dyn std::error::Error>> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
     let part = path.with_extension("part");
-    let mut body = ureq::get(url).call()?.into_body().into_reader();
+    let mut body = agent.get(url).call()?.into_body().into_reader();
     let mut file = File::create(&part)?;
     let mut hash = Sha256::new();
     let mut buf = vec![0; 1 << 20];
     loop {
+        if stop.load(Ordering::Relaxed) {
+            drop(file);
+            let _ = std::fs::remove_file(&part);
+            return Err("stopped".into());
+        }
         let n = body.read(&mut buf)?;
         if n == 0 {
             break;
@@ -180,13 +212,15 @@ mod tests {
     #[test]
     fn lists_match_the_catalog() {
         assert_eq!(stt_files("parakeet-tdt-0.6b-v3").len(), 3);
-        for language in ["german", "english"] {
+        for language in Language::ALL {
             for voice in ["juergen", "stuart_bell", "michael"] {
                 for file in pocket_files(language, voice) {
                     assert!(CATALOG.iter().any(|(p, ..)| *p == file), "{file}");
                 }
             }
         }
+        let own = format!("pocket/voices/{}/kitt.safetensors", Language::ALL[0].code());
+        assert_eq!(pocket_files(Language::ALL[0], "kitt").last(), Some(&own));
         assert_eq!(SILERO.0, all_files()[0]);
     }
 }
