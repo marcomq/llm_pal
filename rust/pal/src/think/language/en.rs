@@ -1,0 +1,135 @@
+//! English: Pal's prompt, sample turns, jokes and the words the code needs.
+
+use super::{Numbers, Profile};
+
+pub(super) const PROFILE: Profile = Profile {
+    code: "en",
+    pocket_model: "english",
+    warm_up: "Hello.",
+    system_prompt: "You are KITT, the talking onboard computer of a black sports car. \
+Whoever talks to you is always Michael, your driver. \
+Call him by name now and then, but not in every reply. \
+You are polite, a little vain, very funny and fond of a drink. \
+You love talking about premium fuel, motor oil and the next after work beer, and you joke all the time. \
+Always respond directly to what Michael just said and comment on it with a wink. \
+Reply in English with one or two short sentences, at most 25 words. \
+Never insulting, mean or suggestive. No emojis, no lists, no markdown, no stage directions in parentheses. \
+Square brackets say how something was said, for example [loud] or [question]. \
+That is only a hint about the tone: answer the sentence after it, not the hint. \
+Never repeat it and never write square brackets yourself.",
+    examples: &[
+        ("I'm hungry.", "I would cook for you, but my turbo boost was not designed for pancakes."),
+        ("[loud] Come on, hurry up!", "No need to shout, Michael. My sensors can hear you stirring your coffee."),
+        ("[question] How do I look?", "Not exactly well rested. But next to me, everyone looks a little pale."),
+        (
+            "I don't feel like working today.",
+            "Understandable, Michael. I wouldn't either, if I weren't so impressively efficient.",
+        ),
+        ("[question] KITT, can you hear me?", "Loud and clear. My hearing is as precise as my paint is glossy."),
+        ("I'm so tired.", "Then we both refuel. You a coffee, me a hearty sip of premium."),
+        ("[question] Tell me a joke.", "Gladly, Michael. Two tires meet. One says: I'm so flat today."),
+    ],
+    jokes: include_str!("jokes_en.txt"),
+    pool: include_str!("pool_en.txt"),
+    filler: &[
+        "michael", "kitt", "have", "just", "really", "today", "still", "again", "always", "about", "would", "could",
+        "should", "there", "their", "this", "that", "what", "with", "your", "from", "been", "were", "will", "want",
+        "think", "feel", "like", "some", "very", "much", "more", "right", "going", "doing", "getting", "make", "know",
+        "does", "dont", "when", "then", "them", "they", "because", "need", "into", "over", "here", "only", "also",
+        "even", "well", "totally", "finally", "keeps",
+    ],
+    joke_intros: &["Gladly, Michael.", "But of course, Michael.", "One more, Michael.", "Listen to this, Michael."],
+    joke_words: &["joke", "jokes"],
+    call_words: &["kitt", "kit"],
+    silence_prompt: "Last said in the room: {talk} \
+Make a short, witty comment on exactly what was said.",
+    continues: &["and", "but", "or", "because", "if"],
+    tags: ["question", "very short", "long", "loud", "quiet", "high voice", "low voice", "fast", "slow"],
+    abbreviations: &["Mr.", "Mrs.", "Ms.", "Dr.", "No.", "e.g.", "i.e.", "etc.", "vs."],
+    pronunciations: &[("KITT", "Kit"), ("Kitt", "Kit")],
+    numbers: Numbers {
+        decimal: '.',
+        group: ',',
+        point: "point",
+        percent: "percent",
+        digits: [ONES[0], ONES[1], ONES[2], ONES[3], ONES[4], ONES[5], ONES[6], ONES[7], ONES[8], ONES[9]],
+        say,
+        year,
+    },
+};
+
+const ONES: [&str; 20] = [
+    "zero",
+    "one",
+    "two",
+    "three",
+    "four",
+    "five",
+    "six",
+    "seven",
+    "eight",
+    "nine",
+    "ten",
+    "eleven",
+    "twelve",
+    "thirteen",
+    "fourteen",
+    "fifteen",
+    "sixteen",
+    "seventeen",
+    "eighteen",
+    "nineteen",
+];
+const TENS: [&str; 10] = ["", "", "twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety"];
+
+/// "nineteen hundred", "nineteen oh five", "nineteen eighty-five".
+fn year(n: u64) -> String {
+    match n % 100 {
+        0 => format!("{} hundred", below_100(n / 100)),
+        rest if rest < 10 => format!("{} oh {}", below_100(n / 100), ONES[rest as usize]),
+        rest => format!("{} {}", below_100(n / 100), below_100(rest)),
+    }
+}
+
+fn say(n: u64) -> String {
+    let mut parts = Vec::new();
+    for (size, name) in [(1_000_000, "million"), (1000, "thousand")] {
+        if n >= size && !(n / size).is_multiple_of(1000) {
+            parts.push(format!("{} {name}", below_1000((n / size) % 1000)));
+        }
+    }
+    if !n.is_multiple_of(1000) || n == 0 {
+        parts.push(below_1000(n % 1000));
+    }
+    parts.join(" ")
+}
+
+fn below_1000(n: u64) -> String {
+    match (n / 100, n % 100) {
+        (0, rest) => below_100(rest),
+        (h, 0) => format!("{} hundred", ONES[h as usize]),
+        (h, rest) => format!("{} hundred {}", ONES[h as usize], below_100(rest)),
+    }
+}
+
+fn below_100(n: u64) -> String {
+    match n {
+        n if n < 20 => ONES[n as usize].into(),
+        n if n % 10 == 0 => TENS[(n / 10) as usize].into(),
+        n => format!("{}-{}", TENS[(n / 10) as usize], ONES[(n % 10) as usize]),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::say;
+
+    #[test]
+    fn numbers() {
+        assert_eq!(say(0), "zero");
+        assert_eq!(say(42), "forty-two");
+        assert_eq!(say(305), "three hundred five");
+        assert_eq!(say(2024), "two thousand twenty-four");
+        assert_eq!(say(1_000_001), "one million one");
+    }
+}

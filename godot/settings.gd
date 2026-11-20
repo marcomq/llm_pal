@@ -8,7 +8,7 @@ signal saved
 const PROVIDERS := ["local", "ollama", "openai", "anthropic"]
 const PROVIDER_NAMES := ["llama (lokal)", "Ollama", "OpenAI", "Anthropic"]
 const DEFAULT_NAME := "Michael"
-## Pocket TTS catalog voices; `build.sh push-models` copies the same list to the phone. The first is the default.
+## Pocket TTS catalog voices; `downloader.rs` lists the same voices. The first is the default.
 const VOICES := ["juergen", "stuart_bell", "michael"]
 const VOICE_NAMES := ["Jürgen", "Stuart Bell", "Michael"]
 const LANGUAGES := ["de", "en"]

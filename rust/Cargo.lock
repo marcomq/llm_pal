@@ -2582,50 +2582,33 @@ dependencies = [
 ]
 
 [[package]]
-name = "pal-brain"
+name = "pal"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
+ "cpal",
+ "godot",
  "hound",
  "idna_adapter",
+ "jni-sys 0.4.1",
  "libc",
  "llama-cpp-2",
  "mq-bridge",
  "mq-bridge-onnx",
- "pal-core",
- "pal-tts",
- "serde",
- "serde_json",
- "thiserror 2.0.21",
- "tokio",
- "xn",
-]
-
-[[package]]
-name = "pal-core"
-version = "0.1.0"
-dependencies = [
- "cpal",
- "crossbeam-channel",
- "hound",
- "jni-sys 0.4.1",
- "libc",
  "ndk-context",
  "ort",
+ "pal-tts",
  "realfft",
  "rtrb",
  "rubato 5.0.1",
  "serde",
+ "serde_json",
+ "sha2 0.10.9",
  "sonora",
  "thiserror 2.0.21",
-]
-
-[[package]]
-name = "pal-godot"
-version = "0.1.0"
-dependencies = [
- "godot",
- "libc",
- "pal-brain",
+ "tokio",
+ "ureq",
+ "xn",
 ]
 
 [[package]]
@@ -4599,6 +4582,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cde93ff05758a36a851a398a772b0b79a82fbe3c186a46f2696baaeaf84c966b"
 dependencies = [
  "base64 0.23.1",
+ "flate2",
  "log",
  "percent-encoding",
  "rustls",

@@ -7,14 +7,17 @@ Microphone → 16 kHz mono → Silero VAD → Smart Turn (end of turn) → speec
 sentence streaming → Kyutai Pocket TTS.
 
 ```
-rust/pal-core    capture, resampling, VAD, segmenter, prosody features, playback
-rust/pal-brain   the agent: STT, LLM, prosody tags, persona, sentence splitting, numbers as words, TTS
-                 language/ holds every text and word list per language (de.rs, en.rs)
+rust/pal         the app as one crate (GDExtension `PalNode` in godot.rs)
+  hear/          capture, resampling, echo cancellation, VAD, segmenter, Smart Turn, prosody, STT
+  think/         the conversation, persona, party mode, LLM (local or a server);
+                 think/language/ holds every text, word list and number word per language (de.rs, en.rs)
+  speak/         sentence splitting, numbers as words, Pocket TTS, playback
+  transport.rs   connects the parts over mq-bridge
+  downloader.rs  fetches missing models (sha256-checked), the same on macOS and Android
+  platform/      the few things Android needs (desktop.rs is empty)
 rust/pal-tts     Kyutai Pocket TTS in-process (model code from kyutai-labs/pocket-tts, MIT)
-rust/pal-godot   GDExtension: `PalNode` (agent, state, Pal's voice level, signals for texts)
 godot/           UI: KITT's voice box or HAL's eye (space or a tap on the label switches); language toggle top right
-scripts/         fetch-models.sh (Silero, Smart Turn, Parakeet, Qwen; sha256-checked), make-test-audio.sh (macOS `say`),
-                 make-hal-panel.py
+scripts/         make-test-audio.sh (macOS `say`), make-hal-panel.py
 ```
 
 ```sh
@@ -22,11 +25,10 @@ scripts/         fetch-models.sh (Silero, Smart Turn, Parakeet, Qwen; sha256-che
 ./build.sh test          # all tests, including the ones that need the models
 ./build.sh godot         # Pal with the Godot display (models from models/ or $PAL_MODELS; $PAL_LLM picks the GGUF)
 ./build.sh install       # build the arm64 Android APK and install it with adb
-./build.sh push-models   # copy the models to the phone (once, about 2 GB)
 ```
 
-On the Mac, Pocket TTS downloads its model and voice into the Hugging Face cache on first start. Android builds have
-no downloader; `push-models` copies those files from the Mac's cache.
+Pal downloads missing models into its model folder on start, on the Mac and on Android alike (about 2 GB the first
+time).
 
 The UI starts in German; English is one tap away.
 

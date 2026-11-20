@@ -1,14 +1,11 @@
 [workspace]
 resolver = "2"
-members = ["pal-core", "pal-brain", "pal-godot", "pal-tts"]
+members = ["pal", "pal-tts"]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
-
-[workspace.dependencies]
-pal-core = { path = "pal-core" }
 
 # Local mq-bridge with streaming `openai_chat`; also used by mq-bridge-onnx.
 [patch.crates-io]
