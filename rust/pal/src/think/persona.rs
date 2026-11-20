@@ -12,6 +12,10 @@ const QUIP_MAX_WORDS: usize = 10;
 /// Longer lines are about more than the pool turn they share words with and go to the model.
 const POOL_MAX_WORDS: usize = 20;
 
+/// The history may grow this many turns past `max_turns` before it is cut back to `max_turns`. Each cut changes the
+/// prompt's start, and the model, which can't drop its oldest tokens, reads the whole history again.
+const HISTORY_SLACK: usize = 2;
+
 /// The name the texts call the user; `Persona::kitt` puts the configured one in its place.
 pub const DEFAULT_NAME: &str = "Michael";
 /// A pool line fits only if it is negated like the transcript; "I'm not drinking beer" isn't "I'm drinking beer".
@@ -177,8 +181,8 @@ impl Persona {
             return false;
         }
         self.history.push_back((user_line, reply));
-        while self.history.len() > self.max_turns {
-            self.history.pop_front();
+        if self.history.len() > self.max_turns + HISTORY_SLACK {
+            self.history.drain(..self.history.len() - self.max_turns);
         }
         true
     }
@@ -244,15 +248,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn keeps_the_last_turns_in_order() {
+    fn keeps_the_last_turns_in_order_and_drops_old_ones_in_blocks() {
         let mut p = Persona::new("sys");
         for i in 0..5 {
             p.remember(format!("u{i}"), format!("a{i}"));
         }
+        assert_eq!(p.context().len(), 1 + 2 * 5, "the history grows past max_turns by the slack");
+        p.remember("u5".into(), "a5".into());
         p.remember("ignored".into(), String::new());
         let m = p.messages(&Persona::user_line("Hello", "[question]"));
         let text: Vec<_> = m.iter().map(|m| m.content.as_str()).collect();
-        assert_eq!(text, ["sys", "u2", "a2", "u3", "a3", "u4", "a4", "[question] Hello"]);
+        assert_eq!(text, ["sys", "u3", "a3", "u4", "a4", "u5", "a5", "[question] Hello"]);
         assert_eq!(m[1].role, Role::User);
         assert_eq!(m[2].role, Role::Assistant);
     }
@@ -291,6 +297,10 @@ mod tests {
         let (a, b) = (p.quip("Wie ist das Wetter?").unwrap(), p.quip("Und wie wird das Wetter morgen?").unwrap());
         assert_ne!(a, b);
         assert!(p.quip("Wie geht's dir, KITT?").is_some());
+        assert!(p.quip("Ruf bitte meine Mutter an").unwrap().contains("Michael"), "any name between ruf and an");
+        assert!(p.quip("Fahr los, KITT!").is_some());
+        assert!(p.quip("Ich hole beim Edeka ein halbes Hähnchen").unwrap().contains("Hähnchen"));
+        assert!(Persona::kitt(Language::English, DEFAULT_NAME).quip("Let's go, KITT!").is_some());
         assert_eq!(p.quip("Wie geht das?"), None, "every word of a trigger must occur");
         assert_eq!(p.quip("Bei dem Wetter habe ich heute wirklich überhaupt keine Lust, noch rauszugehen"), None);
         assert!(Persona::kitt(Language::English, DEFAULT_NAME).quip("How are you today?").is_some());
@@ -320,6 +330,8 @@ mod tests {
         assert_eq!(p.pooled("Es regnet"), None, "a reply in the history is not given again");
         let en = Persona::kitt(Language::English, DEFAULT_NAME);
         assert!(en.pooled("I'm stuck in traffic again.").is_some());
+        assert!(p.pooled("Der Build ist schon wieder kaputt.").unwrap().contains("Motor"));
+        assert!(en.pooled("Well, it works on my machine.").unwrap().contains("ship"));
         let beer = en.pooled("I'm drinking beer today.");
         assert!(beer.as_ref().is_none_or(|r| !r.contains("without beer")), "negation must match: {beer:?}");
         assert!(en.pooled("I'm not drinking beer today.").unwrap().contains("without beer"));

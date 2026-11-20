@@ -16,7 +16,7 @@ use mq_bridge::{CanonicalMessage, Handled, HandlerError, Publisher};
 
 use crate::think::llm::{LlmConfig, LocalLlm, Message};
 use crate::think::remote::RemoteConfig;
-use crate::transport::{CORRELATION_ID, End, LlmRequest, Report, Spoken, Token, failed};
+use crate::transport::{CORRELATION_ID, End, LlmRequest, Report, Spoken, Token, failed, trace_received};
 use crate::{Error, Result};
 
 /// How often a running reply checks whether its turn was cancelled.
@@ -208,6 +208,7 @@ impl Server {
                 Err(error) => return Ok(Token::last(turn, index, End::Failed, &error)),
             };
             let _ = self.runtime.block_on((received.commit)(MessageDisposition::Ack));
+            trace_received("pal_llm_server", &received.message);
             let token = Token::from_message(&received.message);
             // The rest of an earlier reply whose forwarding failed.
             if token.turn != turn {
@@ -225,6 +226,7 @@ impl Server {
 /// The `pal_llm` stage: messages in, tokens out. Reports `Prefilled` after each prefill.
 pub fn stage(model: Option<Model>, mut server: Option<Server>, report: Report) -> impl BlockingHandler {
     move |msg: CanonicalMessage, ctx: &HandlerContext| {
+        trace_received("pal_llm", &msg);
         let (turn, messages) = match LlmRequest::from_message(&msg).map_err(failed)? {
             LlmRequest::Prefill(messages) => {
                 // The server keeps no cache; a fallback model reads everything on its first turn instead.

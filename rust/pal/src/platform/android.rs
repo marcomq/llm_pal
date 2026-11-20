@@ -172,6 +172,15 @@ pub(crate) fn init_log() {
     });
 }
 
+/// The tracing filter: apps get no environment, so it comes from `adb shell setprop debug.pal.log pal=debug`.
+pub(crate) fn log_filter() -> String {
+    let mut value = [0 as c_char; libc::PROP_VALUE_MAX as usize];
+    // SAFETY: the name is NUL-terminated and `value` holds PROP_VALUE_MAX bytes, the most the call writes.
+    unsafe { libc::__system_property_get(c"debug.pal.log".as_ptr(), value.as_mut_ptr()) };
+    // SAFETY: the call leaves a NUL-terminated string, empty if the property isn't set.
+    unsafe { CStr::from_ptr(value.as_ptr()) }.to_string_lossy().into_owned()
+}
+
 /// Nice 10 for the calling thread and the threads it starts later (llama.cpp's workers inherit it), so speech
 /// and the microphone get the few fast cores first.
 pub(crate) fn background_thread() {

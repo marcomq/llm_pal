@@ -15,8 +15,19 @@ unsafe impl ExtensionLibrary for PalExtension {
     fn on_stage_init(stage: godot::init::InitStage) {
         if stage == godot::init::InitStage::Scene {
             crate::platform::init_log();
+            init_tracing();
         }
     }
+}
+
+/// Tracing to stderr, filtered like `RUST_LOG` (e.g. `pal=debug,mq_bridge=debug`; see `platform::log_filter`);
+/// without a filter it stays silent.
+fn init_tracing() {
+    use tracing_subscriber::EnvFilter;
+    use tracing_subscriber::filter::LevelFilter;
+    let filter =
+        EnvFilter::builder().with_default_directive(LevelFilter::OFF.into()).parse_lossy(crate::platform::log_filter());
+    let _ = tracing_subscriber::fmt().with_env_filter(filter).with_ansi(false).with_writer(std::io::stderr).try_init();
 }
 
 #[derive(GodotClass)]

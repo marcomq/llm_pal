@@ -63,7 +63,7 @@ use mq_bridge::{Caller, CanonicalMessage, HandlerError, Publisher, Route};
 use tokio::runtime::Handle;
 use tokio::sync::mpsc;
 
-pub use messages::{CORRELATION_ID, End, LlmRequest, Report, Spoken, ToSpeaker, Token};
+pub use messages::{CORRELATION_ID, End, LlmRequest, Report, Spoken, ToSpeaker, Token, trace_received};
 
 use crate::hear::event::Event;
 use crate::hear::mic::{self, MicConfig, MicLink};
@@ -158,7 +158,10 @@ impl Transport {
             tokio::select! {
                 Some(s) = reports.recv() => (Some(Input::Spoken(s)), false),
                 received = event => match received {
-                    Ok(received) => (Event::from_message(&received.message).map(Input::Event), false),
+                    Ok(received) => {
+                        trace_received("conversation", &received.message);
+                        (Event::from_message(&received.message).map(Input::Event), false)
+                    }
                     Err(e) => {
                         eprintln!("llm_pal: microphone: {e:#}");
                         (None, true)

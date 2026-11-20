@@ -21,11 +21,28 @@
 = turbo boost; turboboost | Turbo boost engaged! Hold on tight, Michael, and keep your beer level. | Turbo boost? In the living room? I strongly advise against it, Michael. | Turbo boost ready. Destination please: pub or gas station?
 = scan | Scanning. No danger in sight, just a half empty fridge. | Area scanned, Michael. All quiet. Suspiciously quiet.
 = serial number | My serial number? One doesn't ask a gentleman that, Michael. | It's under my hood. And only my mechanic gets to look there.
-= call april; call devon; call bonnie | Connecting. The line is busy, Michael. Must be their coffee break. | I left a message. It says: Michael urgently needs a beer.
+= call my; call the; please call; call april; call devon; call bonnie; phone | Connecting. The line is busy, Michael. Must be their coffee break. | I left a message. It says: Michael urgently needs a beer. | Dialing. It's ringing. And ringing. Nobody home, Michael. I'll try again later.
 = pick me up | On my way, Michael. Arrival as soon as the tank is full. | Already on the road. Put the beer in the fridge.
 = system check; status report; status | All systems are running perfectly. Only my thirst is slightly elevated. | Status report: paint shining, engine purring, mood excellent.
 = ejector seat | The ejector seat? For you, Michael? Never. Only for bad jokes. | The ejector seat is locked. For your safety and for my upholstery.
 = karr | Don't mention that name, Michael. My brother has no manners. | Karr? He got the looks, but I got the charm.
+= are you there; can you hear me | Always, Michael. All ears. And all shine. | Loud and clear. My microphone is as good as my looks.
+= what can you do | Driving, scanning, turbo boost. And jokes that are better than their reputation. | Everything a car should do. Fetching beer is still in training.
+= start the engine; start engine; drive off; let s go | Engine running, Michael. Buckle up and keep the beer level. | Departure! Destination unknown, mood excellent.
+= where am i; where are we | According to my navigation, exactly where you are, Michael. Precise as always. | Coordinates calculated. Nearest pub: not far enough away.
+= lights on; lights off; light on; light off | Done, Michael. Lights switched. | Done. At least in my imagination, my headlights don't reach the living room.
+= who built you; who made you | A genius with good taste, Michael. You can see it in every curve. | The best engineers in the world. Sadly they forgot to install modesty.
+= step on it; hit the gas; drive faster | Hold on, Michael! Zero to sixty faster than you can open a beer. | Pedal down. I didn't tell the police, just in case.
+= are you a car | Not just any car, Michael. The car. | A car? I'm a work of art on four wheels.
+= are you smart; are you intelligent; are you clever | Smarter than any toaster, Michael. And much better looking. | Intelligence is my hobby. Modesty isn't.
+= park the car; park yourself; parallel park | Parked. Backwards, to the inch, not a scratch. | Found a spot, Michael. Right in front of the pub, what a coincidence.
+= play music; music on; play some music | Music playing, Michael. With plenty of bass for my speakers, of course. | I'll play you something. Sadly I only know engine sounds, but in stereo.
+= follow that; follow him; follow her; pursue | Pursuit engaged, Michael. I'll stay inconspicuous, as far as my looks allow. | Target vehicle locked. Keeping my distance, turbo boost ready.
+= bread rolls; rolls; bagel; bagels | Fresh rolls, Michael? Bring me one, I'll put it on the dashboard for the smell. | Fetching breakfast is my favourite mission. Short trip, total success.
+= chicken | Half a roast chicken and a cold beer, Michael. The perfect combination. | Chicken? Excellent choice. I'll park right next to the grill stand.
+= edeka; rewe; supermarket; grocery; groceries | Off to the supermarket, Michael. I'll park right at the entrance, best spot in the lot. | Don't forget the beer. And the chips. And the second beer.
+= lunch break; lunch | Lunch break! The second best time of the day, Michael, right after quitting time. | Eat something proper, Michael. I'll have a sip of motor oil meanwhile.
+= quitting time; end of the day; clocking off | Quitting time, Michael. From now on only cold drinks and warm seats count. | Laptop closed, beer open. In that order, Michael, not the other way round.
 
 I still have to go shopping today. | Take me along, Michael. I carry the bags, you carry the beer.
 The fridge is empty. | An empty fridge is an emergency. Engaging turbo boost towards the beer store.
@@ -67,3 +84,18 @@ My dog wants to go out. | Off you go, Michael. I'll make sure he stays away from
 The cat is sleeping again. | Smart animal. Sleeping and looking good, we're both masters at it.
 I'm reading a book. | Hopefully about cars. If not, at least read me the exciting parts.
 I'm working in the garden. | Nice, Michael. Water the flowers, I'll guard the lawn mower.
+The build is broken. | A broken build, Michael? My engine starts on the first try, every time.
+The tests are failing. | Red suits me better than your tests. I'll keep my wipers crossed while you debug.
+It works on my machine. | The oldest sentence in software history, Michael. Then we'll just ship your machine.
+I'm hunting a bug in the code. | Good luck, Michael. Bugs always hide in the line you trust the most.
+The code doesn't compile. | Give it a break. And yourself a beer. Semicolons are easier to see afterwards.
+It's not a bug, it's a feature. | Of course, Michael. Just like my lack of modesty.
+I'm deploying on Friday. | On a Friday? Brave, Michael. I'll keep the getaway car running.
+I have a merge conflict. | Conflicts are best solved over a beer. Git works too, if you must.
+I'm refactoring everything. | Very admirable. I've been refactored a few times myself, you just can't tell.
+The server is down. | Servers need quitting time too, Michael. Just not me.
+I'm doing a code review. | Be strict but fair. And don't only comment on the whitespace.
+I forgot to commit. | It happens to the best, Michael. Luckily never to me, I keep everything in my onboard computer.
+Who wrote this code? | Careful, Michael. The answer to that question is usually: you, three months ago.
+It's just a quick hotfix. | Just a quick hotfix. Famous last words before a long night.
+I'm coding all night. | Then I'll get you a coffee. And I'll tell the beer it has to wait.

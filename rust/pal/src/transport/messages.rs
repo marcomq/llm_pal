@@ -5,7 +5,7 @@
 //! speaker (`Hold`, `Release`, `Discard`, `Stop`) carry the turn under `turn` instead: a cancel never drops them.
 
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use mq_bridge::CanonicalMessage;
 
@@ -23,6 +23,32 @@ const STREAM_STATUS: &str = "mqb.stream.status";
 
 fn meta<'a>(msg: &'a CanonicalMessage, key: &str) -> &'a str {
     msg.metadata.get(key).map_or("", String::as_str)
+}
+
+/// Logs a message as it reaches `stage`, with its age: the time since its id was made.
+pub fn trace_received(stage: &str, msg: &CanonicalMessage) {
+    if !tracing::enabled!(tracing::Level::TRACE) {
+        return;
+    }
+    let either = |a: &str, b: &str| Some(meta(msg, a)).filter(|v| !v.is_empty()).unwrap_or(meta(msg, b)).to_string();
+    tracing::trace!(
+        stage,
+        turn = either(CORRELATION_ID, TURN),
+        kind = either(KIND, crate::hear::event::EVENT),
+        index = meta(msg, STREAM_INDEX),
+        age_us = age_us(msg.message_id),
+        id = %mq_bridge::canonical_message::format_message_id(msg.message_id),
+        "received"
+    );
+}
+
+/// Microseconds since `id` was made. mq-bridge's ids are UUID v7: 48 bits of Unix milliseconds, the version, then
+/// the millisecond's fraction in sixteenths.
+fn age_us(id: u128) -> i64 {
+    let ms = (id >> 80) as i64;
+    let sixteenths = ((id >> 72) & 0xF) as i64;
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_micros() as i64);
+    now - (ms * 1000 + sixteenths * 1000 / 16)
 }
 
 /// `[pal.llm]`: what the model is asked.
@@ -201,6 +227,14 @@ pub type Report = Arc<dyn Fn(Spoken) + Send + Sync>;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_new_message_is_younger_than_a_millisecond_and_ages() {
+        let id = CanonicalMessage::from("x").message_id;
+        assert!((-100..1000).contains(&age_us(id)), "{}", age_us(id));
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        assert!((4000..10_000).contains(&age_us(id)), "{}", age_us(id));
+    }
 
     #[test]
     fn messages_survive_the_wire() {

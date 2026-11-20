@@ -9,7 +9,7 @@ use mq_bridge::{CanonicalMessage, Handled};
 use crate::speak::sentences::Sentences;
 use crate::speak::tts::PocketSpeaker;
 use crate::think::language::Language;
-use crate::transport::{End, Report, Spoken, ToSpeaker, Token};
+use crate::transport::{End, Report, Spoken, ToSpeaker, Token, trace_received};
 
 /// Numbers as words, and words the voice reads wrong respelled.
 fn pronounced(text: &str, language: Language) -> String {
@@ -21,6 +21,7 @@ pub fn split(language: Language, report: Report) -> impl BlockingHandler {
     let mut sentences = Sentences::new(language);
     let mut current = String::new();
     move |msg: CanonicalMessage, ctx: &HandlerContext| {
+        trace_received("pal_split", &msg);
         let token = Token::from_message(&msg);
         // A cancelled turn ends without its last sentence, which is dropped here.
         if token.turn != current {
@@ -56,6 +57,7 @@ pub fn speak(speaker: Receiver<PocketSpeaker>, language: Language, report: Repor
     let mut held: Option<Held> = None;
     let mut ready: Option<PocketSpeaker> = None;
     move |msg: CanonicalMessage, ctx: &HandlerContext| {
+        trace_received("pal_speak", &msg);
         let Some((turn, what)) = ToSpeaker::from_message(&msg) else {
             return Ok(Handled::Ack);
         };

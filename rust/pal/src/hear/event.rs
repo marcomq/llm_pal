@@ -59,7 +59,7 @@ pub enum Event {
     Resume,
 }
 
-const EVENT: &str = "mic.event";
+pub(crate) const EVENT: &str = "mic.event";
 const AT_MS: &str = "mic.at_ms";
 const SEGMENT: &str = "mic.segment";
 

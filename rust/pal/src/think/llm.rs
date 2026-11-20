@@ -4,6 +4,7 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Instant;
 
 use llama_cpp_2::context::LlamaContext;
 use llama_cpp_2::context::params::LlamaContextParams;
@@ -116,14 +117,17 @@ impl LocalLlm {
 const BATCH: usize = 512;
 /// Covers the earlier replies in the prompt plus the one being generated.
 const PENALTY_LAST_N: i32 = 256;
+/// A reply to a pause that is then dropped keeps the prefill's checkpoint, so the next reply starts from it.
+const RECENT_CHECKPOINTS: usize = 2;
 
 pub struct LlmSession<'m> {
     llm: &'m LocalLlm,
     ctx: LlamaContext<'m>,
     /// Tokens in the KV cache: the last prompt plus the reply generated after it.
     cached: Vec<LlamaToken>,
-    /// Saved states after the fixed messages and after the last prompt, as (tokens, state). Models with recurrent
-    /// layers (Qwen3.5) can't cut their memory back to any position, only return to such a checkpoint.
+    /// Saved states after the fixed messages and after the last `RECENT_CHECKPOINTS` prompts, as (tokens, state).
+    /// Models with recurrent layers (Qwen3.5) can't cut their memory back to any position, only return to such a
+    /// checkpoint.
     checkpoints: Vec<(usize, SeqState)>,
     last_prefill: usize,
     /// Varies the seed per reply; with the same seed, similar prompts drew the same reply again.
@@ -198,9 +202,11 @@ impl LlmSession<'_> {
     /// Brings the cache to `prompt`, reading only what differs, with a checkpoint after the fixed messages and at the
     /// end. With `logits`, the last token is decoded again if needed, so sampling can start from it.
     fn feed(&mut self, prompt: &[LlamaToken], logits: bool, batch: &mut LlamaBatch) -> Result<()> {
+        let started = Instant::now();
         let n_prompt = prompt.len();
         let same = self.cached.iter().zip(prompt).take_while(|(a, b)| a == b).count().min(n_prompt - logits as usize);
         self.rewind(same)?;
+        let kept = self.cached.len();
 
         // The fixed messages end where the next message starts, or with the prompt if it holds just them.
         let vocab = self.llm.model.vocab();
@@ -233,6 +239,15 @@ impl LlmSession<'_> {
                 self.save();
             }
         }
+        // `lost`: tokens the prompt shared with the cache but read again, as the memory couldn't be cut there.
+        tracing::debug!(
+            kind = if logits { "reply" } else { "prefill" },
+            read = self.last_prefill,
+            of = n_prompt,
+            lost = same - kept,
+            ms = started.elapsed().as_millis() as u64,
+            "prompt read"
+        );
         Ok(())
     }
 
@@ -283,7 +298,14 @@ impl LlmSession<'_> {
             return;
         }
         if let Ok(state) = self.ctx.state_seq_get(0, LlamaStateSeqFlags::PARTIAL_ONLY) {
-            self.checkpoints.retain(|(c, _)| Some(*c) == keep_system);
+            tracing::debug!(at = n, bytes = state.byte_len(), "checkpoint");
+            let recent = self.checkpoints.iter().filter(|(c, _)| Some(*c) != keep_system).count();
+            let mut oldest = (recent + 1).saturating_sub(RECENT_CHECKPOINTS);
+            self.checkpoints.retain(|(c, _)| {
+                let drop = Some(*c) != keep_system && oldest > 0;
+                oldest -= drop as usize;
+                !drop
+            });
             self.checkpoints.push((n, state));
         }
     }
@@ -356,6 +378,7 @@ impl LlmSession<'_> {
         }
         let mut text = String::new();
         let mut pending = Vec::new();
+        let (started, n_cached) = (Instant::now(), self.cached.len());
         for _ in 0..cfg.max_tokens {
             if cancel.load(Ordering::Relaxed) {
                 break;
@@ -375,6 +398,9 @@ impl LlmSession<'_> {
             self.ctx.decode(&mut batch).map_err(err)?;
             self.cached.push(token);
         }
+        let tokens = self.cached.len() - n_cached;
+        let ms = started.elapsed().as_millis() as u64;
+        tracing::debug!(tokens, ms, per_token_ms = ms / tokens.max(1) as u64, "reply generated");
         Ok(text.trim().to_string())
     }
 }
