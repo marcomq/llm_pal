@@ -7,10 +7,6 @@ version = "0.1.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 
-# Local mq-bridge with streaming `openai_chat`; also used by mq-bridge-onnx.
-[patch.crates-io]
-mq-bridge = { path = "../../mq-bridge" }
-
 # DSP and pitch tracking are slow unoptimized, also in tests.
 [profile.dev]
 opt-level = 2

@@ -69,8 +69,8 @@ Pal says a quip or pool reply to one of its lines, or else the model comments on
   `complete`, `error` (payload = error text) or `cancelled`.
 - **STT**: see step 4; an endpoint, not a route.
 - **Microphone**: `pal_mic`, a custom input endpoint (step 1); usable in any mq-bridge route.
-- mq-bridge 1.6.2 from the local checkout `../mq-bridge` (`[patch.crates-io]` in `rust/Cargo.toml`, also used by
-  mq-bridge-onnx). Don't change mq-bridge itself. Ideas for later (deferred): `lookup` middleware for
+- mq-bridge `1.6.0` from crates.io (any 1.x ≥ 1.6.0; also used by mq-bridge-onnx). Never a local path or git
+  checkout. Don't change mq-bridge itself. Ideas for later (deferred): `lookup` middleware for
   enrichment, `switch`, embeddings + qdrant.
 
 ## LLM ("brain")
@@ -96,6 +96,9 @@ Pal says a quip or pool reply to one of its lines, or else the model comments on
 Weights are quantized to q8_0 at load (`pal-tts/src/lib.rs`, `type Backend`): 2.4× faster than f32 on the Mac.
 `numbers.rs` writes digits as words (number words per language in `think/language/`), `leveler.rs` evens out loudness, `voice_filter.rs` adds KITT's speaker sound.
 Voice per language from the settings (`Settings.VOICES`, default `juergen`); `downloader.rs` lists the same voices.
+Voices of one's own: `pocket/voices/<de|en>/<name>.safetensors` in the model folder, made with the separate tool
+`pal-voice`, never downloaded (README, "Voices of one's own"). Only own voices or voices with the speaker's
+explicit consent; never add recordings or cloned voices to the repository or the APK.
 
 ## Godot
 

@@ -143,15 +143,35 @@ mod tests {
         let url = format!("http://{}/v1", listener.local_addr().unwrap());
         let server = std::thread::spawn(move || {
             let (mut socket, _) = listener.accept().unwrap();
-            let mut request = vec![0; 16384];
-            let n = socket.read(&mut request).unwrap();
+            socket.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+            let request = read_request(&mut socket);
             match response {
                 Some(response) => socket.write_all(response.as_bytes()).unwrap(),
                 None => std::thread::sleep(Duration::from_secs(5)),
             }
-            String::from_utf8_lossy(&request[..n]).into_owned()
+            request
         });
         (url, server)
+    }
+
+    /// Headers and the whole body (by `content-length`), however many reads they take.
+    fn read_request(socket: &mut std::net::TcpStream) -> String {
+        let mut request = Vec::new();
+        let mut buf = [0; 4096];
+        loop {
+            if let Some(end) = request.windows(4).position(|w| w == b"\r\n\r\n") {
+                let length = String::from_utf8_lossy(&request[..end])
+                    .lines()
+                    .find_map(|l| l.to_lowercase().strip_prefix("content-length:").map(|v| v.trim().parse().unwrap()))
+                    .unwrap_or(0);
+                if request.len() >= end + 4 + length {
+                    return String::from_utf8_lossy(&request).into_owned();
+                }
+            }
+            let n = socket.read(&mut buf).expect("the request within the read timeout");
+            assert!(n > 0, "the client closed before the whole request");
+            request.extend_from_slice(&buf[..n]);
+        }
     }
 
     fn sse(events: &str) -> Option<String> {

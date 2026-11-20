@@ -1,7 +1,9 @@
 //! macOS and other desktops: nothing to set up. `android.rs` has the same functions with real work.
 
 /// cpal finds its devices by itself.
-pub(crate) fn init_audio() {}
+pub(crate) fn init_audio() -> Result<(), crate::Error> {
+    Ok(())
+}
 
 /// stderr already reaches the terminal.
 pub(crate) fn init_log() {}

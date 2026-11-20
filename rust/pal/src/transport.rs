@@ -129,8 +129,11 @@ impl Transport {
                 Some(config) => (Some(Server::start(config).await?), Some(publisher(SERVER_CANCEL).await?)),
                 None => (None, None),
             };
-            let routes = deploy_routes(brain::stage(model, server, report.clone()), speaker, language, report).await?;
-            Ok::<_, mq_bridge::anyhow::Error>((routes, server_cancel))
+            let routes = deploy_routes(brain::stage(model, server, report.clone()), speaker, language, report).await;
+            if routes.is_err() {
+                stop_routes().await;
+            }
+            Ok::<_, mq_bridge::anyhow::Error>((routes?, server_cancel))
         });
         let (routes, server_cancel) = started.map_err(routes_error)?;
         Ok(Self { rt, routes, server_cancel, reports, stt: None, mic: None, mic_lost: false, model: model_thread })
@@ -255,15 +258,20 @@ impl Drop for Transport {
     fn drop(&mut self) {
         self.mic = None;
         self.rt.block_on(async {
-            Route::stop(ROUTE_LLM).await;
-            Route::stop(ROUTE_SPLIT).await;
-            Route::stop(ROUTE_SPEAK).await;
+            stop_routes().await;
             if let Some(stt) = self.stt.take() {
                 stt.stop().await;
             }
         });
         self.model = None;
     }
+}
+
+/// Stops the reply routes; one that isn't deployed is skipped.
+async fn stop_routes() {
+    Route::stop(ROUTE_LLM).await;
+    Route::stop(ROUTE_SPLIT).await;
+    Route::stop(ROUTE_SPEAK).await;
 }
 
 /// The deployed reply routes: where to send, and how to cancel a turn in them.

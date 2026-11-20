@@ -97,7 +97,7 @@ pub struct Playback {
 
 impl Playback {
     pub fn start() -> Result<Self, Error> {
-        crate::platform::init_audio();
+        crate::platform::init_audio()?;
         let dev =
             cpal::default_host().default_output_device().ok_or_else(|| Error::Audio("no output device".into()))?;
         let default = dev.default_output_config().map_err(|e| Error::Audio(format!("output config: {e}")))?;

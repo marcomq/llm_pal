@@ -5,8 +5,6 @@ mod cpu;
 pub mod downloader;
 mod godot;
 pub mod hear;
-#[cfg_attr(target_os = "android", path = "platform/android.rs")]
-#[cfg_attr(not(target_os = "android"), path = "platform/desktop.rs")]
 mod platform;
 pub mod speak;
 pub mod think;

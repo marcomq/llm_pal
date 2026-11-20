@@ -32,4 +32,23 @@ time).
 
 The UI starts in German; English is one tap away.
 
+## Voices of one's own
+
+Besides the built-in voices (e.g. `juergen`), Pal loads voices of one's own from
+
+```
+<models folder>/pocket/voices/<de|en>/<name>.safetensors
+```
+
+They are never downloaded; `./build.sh install` copies them to the phone once Pal has started there (it makes the
+folder). The voice then shows up in the settings (key S or "…"). Such a file is made from a 10–30 s recording with the separate tool `pal-voice` (Pocket TTS's
+voice cloning model, see its README).
+
+**Only clone your own voice or the voice of a person who has expressly agreed.** Never use someone else's voice
+without their consent: not from films, series, radio plays, podcasts or other recordings, and not a voice someone
+else has already cloned. Kyutai's terms for the cloning model require consent, and a person's voice is protected by
+their personality rights. To get a character's style, have a consenting person speak in that style. Don't pass on
+recordings or voices (no repository, APK or download; `models/` is git-ignored), and don't use a cloned voice so
+that others take it for the real person. This is not legal advice; when in doubt, use only your own voice.
+
 License: MIT OR Apache-2.0. Silero VAD: MIT. Smart Turn: BSD-2-Clause. Parakeet TDT: CC-BY-4.0. Qwen3.5: Apache-2.0. Pocket TTS code: MIT (check the Kyutai model card for the weights). No GPL.

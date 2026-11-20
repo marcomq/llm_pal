@@ -31,6 +31,13 @@ fn mic_config(smart_turn: bool) -> MicConfig {
     }
 }
 
+/// llama.cpp's backend exists once per process: tests that load the model take turns.
+static LLAMA: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn llama_turn() -> std::sync::MutexGuard<'static, ()> {
+    LLAMA.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 fn segments_of(events: Vec<Event>) -> Vec<Segment> {
     events
         .into_iter()
@@ -129,7 +136,9 @@ mod models {
     fn parakeet_understands_the_test_sentences() {
         let stt = Stt::new();
         let expected = [&["hallo", "teste"][..], &["zweite", "satz"], &["hörst", "mich"]];
-        for (seg, words) in segments().iter().zip(expected) {
+        let segments = segments();
+        assert_eq!(segments.len(), expected.len());
+        for (seg, words) in segments.iter().zip(expected) {
             let t = Instant::now();
             let text = stt.transcribe(&seg.pcm);
             eprintln!("{:.2} s audio -> {} ms: {text}", seg.features.duration_s, t.elapsed().as_millis());
@@ -144,6 +153,7 @@ mod models {
     #[test]
     #[ignore = "needs models/"]
     fn pool_replies_against_the_model() {
+        let _llama = llama_turn();
         let model = LocalLlm::new(&models().join("Qwen3.5-2B-Q4_K_M.gguf"), LlmConfig::default()).unwrap();
         let mut llm = model.session().unwrap();
         let mut persona = Persona::kitt(Language::German, DEFAULT_NAME);
@@ -170,6 +180,7 @@ mod models {
     #[test]
     #[ignore = "needs models/ and testdata/"]
     fn llm_comments_on_transcripts_and_stops_when_cancelled() {
+        let _llama = llama_turn();
         let stt = Stt::new();
         let t = Instant::now();
         let model = LocalLlm::new(&models().join("Qwen3.5-2B-Q4_K_M.gguf"), LlmConfig::default()).unwrap();
@@ -255,6 +266,7 @@ mod reply {
     #[test]
     #[ignore = "needs models/ and a speaker"]
     fn reply_routes_handle_every_kind_of_turn() {
+        let _llama = llama_turn();
         tts::use_local_files(&models());
         let mut speaker = PocketSpeaker::new("juergen", LANG).unwrap();
         let persona = Persona::kitt(LANG, DEFAULT_NAME);
@@ -292,11 +304,13 @@ mod reply {
         assert!(late.is_empty(), "after discard: {late:?}");
 
         t.reply("t5", &ask("Was machst du am liebsten? Erzähl ausführlich."), false).unwrap();
+        let deadline = Instant::now() + LONG;
         loop {
-            if let Some(Spoken::Said { turn, .. }) = spoken(&mut t, LONG)
-                && turn == "t5"
-            {
-                break;
+            let left = deadline.checked_duration_since(Instant::now()).expect("t5 says a sentence in time");
+            match spoken(&mut t, left) {
+                Some(Spoken::Said { turn, .. }) if turn == "t5" => break,
+                Some(Spoken::Done { turn } | Spoken::Failed { turn, .. }) if turn == "t5" => panic!("t5 ended unsaid"),
+                _ => {}
             }
         }
         let cut = Instant::now();

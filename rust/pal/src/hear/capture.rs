@@ -1,5 +1,8 @@
 //! Microphone capture: the cpal callback downmixes to mono and pushes into a lock-free ring.
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{BufferSize, Stream, StreamConfig};
 
@@ -11,6 +14,8 @@ pub struct Capture {
     _stream: Stream,
     pub sample_rate: u32,
     pub device_name: String,
+    /// Set once the stream can't deliver any more: the device is gone or the stream must be rebuilt.
+    pub failed: Arc<AtomicBool>,
 }
 
 fn name_of(dev: &cpal::Device) -> String {
@@ -27,7 +32,7 @@ fn input_device(host: &cpal::Host, wanted: Option<&str>) -> Option<cpal::Device>
 }
 
 pub fn start(device: Option<&str>) -> Result<(Capture, rtrb::Consumer<f32>), Error> {
-    crate::platform::init_audio();
+    crate::platform::init_audio()?;
     let host = cpal::default_host();
     let dev = input_device(&host, device).ok_or_else(|| Error::Audio(format!("no input device {device:?}")))?;
     let default = dev.default_input_config().map_err(|e| Error::Audio(format!("input config: {e}")))?;
@@ -37,6 +42,8 @@ pub fn start(device: Option<&str>) -> Result<(Capture, rtrb::Consumer<f32>), Err
 
     let (mut tx, rx) = rtrb::RingBuffer::<f32>::new((sample_rate * RING_SECONDS) as usize);
     let ch = channels as usize;
+    let failed = Arc::new(AtomicBool::new(false));
+    let dead = failed.clone();
     let stream = dev
         .build_input_stream(
             config,
@@ -47,10 +54,15 @@ pub fn start(device: Option<&str>) -> Result<(Capture, rtrb::Consumer<f32>), Err
                     let _ = tx.push(mono);
                 }
             },
-            |e| eprintln!("llm_pal: input stream error: {e}"),
+            move |e| {
+                eprintln!("llm_pal: input stream error: {e}");
+                if matches!(e.kind(), cpal::ErrorKind::StreamInvalidated | cpal::ErrorKind::DeviceNotAvailable) {
+                    dead.store(true, Ordering::Relaxed);
+                }
+            },
             None,
         )
         .map_err(|e| Error::Audio(format!("input stream: {e}")))?;
     stream.play().map_err(|e| Error::Audio(format!("input play: {e}")))?;
-    Ok((Capture { _stream: stream, sample_rate, device_name: name_of(&dev) }, rx))
+    Ok((Capture { _stream: stream, sample_rate, device_name: name_of(&dev), failed }, rx))
 }

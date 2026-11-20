@@ -148,9 +148,9 @@ impl MicConsumer {
                     Ok((capture, ring, core))
                 });
                 match opened {
-                    Ok((_capture, ring, core)) => {
+                    Ok((capture, ring, core)) => {
                         let _ = ready_tx.send(Ok(()));
-                        worker(core, ring, tx, &stop_w, &link);
+                        worker(core, ring, tx, &stop_w, &capture.failed, &link);
                     }
                     Err(e) => drop(ready_tx.send(Err(e))),
                 }
@@ -187,13 +187,19 @@ fn worker(
     mut ring: rtrb::Consumer<f32>,
     tx: mpsc::UnboundedSender<Event>,
     stop: &AtomicBool,
+    failed: &AtomicBool,
     link: &MicLink,
 ) {
     let mut buf = Vec::with_capacity(TARGET_RATE as usize);
     let mut emit = |e| drop(tx.send(e));
-    while !stop.load(Ordering::Relaxed) {
+    // A closed channel: the consumer is gone, or its start was given up before it was ready.
+    while !stop.load(Ordering::Relaxed) && !tx.is_closed() {
         let n = ring.slots();
         if n == 0 {
+            if failed.load(Ordering::Relaxed) {
+                eprintln!("llm_pal: the input stream ended");
+                return;
+            }
             std::thread::sleep(Duration::from_millis(10));
             continue;
         }

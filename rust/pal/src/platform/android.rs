@@ -3,9 +3,11 @@
 #![allow(unsafe_op_in_unsafe_fn)]
 
 use std::ffi::{CStr, c_char, c_int, c_void};
-use std::sync::OnceLock;
+use std::sync::Mutex;
 
 use jni_sys::{JNI_OK, JNIEnv, JavaVM, jsize};
+
+use crate::Error;
 
 type GetCreatedJavaVMs = unsafe extern "system" fn(*mut *mut JavaVM, jsize, *mut jsize) -> i32;
 
@@ -95,15 +97,18 @@ unsafe fn gnu_hash_lookup(base: u64, mut dynamic: *const Elf64Dyn, name: &CStr) 
     }
 }
 
-static READY: OnceLock<()> = OnceLock::new();
+/// Set once the context is; a failed attempt leaves it unset, so the next stream tries again.
+static READY: Mutex<bool> = Mutex::new(false);
 
 /// Sets the context cpal needs to open any stream (it panics without), not only to list devices.
-pub(crate) fn init_audio() {
-    READY.get_or_init(|| {
-        if unsafe { try_init() }.is_none() {
-            eprintln!("pal: no Android context, using default audio routing");
-        }
-    });
+pub(crate) fn init_audio() -> Result<(), Error> {
+    let mut ready = READY.lock().unwrap_or_else(|e| e.into_inner());
+    if !*ready {
+        // SAFETY: called once at a time (the lock); the context is set only after every JNI call succeeded.
+        unsafe { try_init() }.ok_or_else(|| Error::Audio("no Android context for audio".into()))?;
+        *ready = true;
+    }
+    Ok(())
 }
 
 unsafe fn try_init() -> Option<()> {

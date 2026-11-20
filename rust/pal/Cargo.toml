@@ -15,7 +15,7 @@ hound = "3.5.1"
 # URLs are ASCII here (Hugging Face, local endpoints); 1.0.0 skips IDNA's ICU crates.
 idna_adapter = "=1.0.0"
 llama-cpp-2 = "0.1.160"
-mq-bridge = { version = "1.6.2", default-features = false, features = ["http-bulk"] }
+mq-bridge = { version = "1.6", default-features = false, features = ["http-bulk"] }
 mq-bridge-onnx = { version = "0.2.0", default-features = false, features = ["asr"] }
 # ort has no stable 2.0; rc releases break the API, hence the exact pin.
 ort = { version = "=2.0.0-rc.15", default-features = false, features = ["std", "download-binaries", "tls-rustls", "api-22"] }

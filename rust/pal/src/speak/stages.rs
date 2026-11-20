@@ -56,6 +56,8 @@ struct Held {
 pub fn speak(speaker: Receiver<PocketSpeaker>, language: Language, report: Report) -> impl BlockingHandler {
     let mut held: Option<Held> = None;
     let mut ready: Option<PocketSpeaker> = None;
+    // The speech thread is gone: nothing is said or done any more, each sentence reports `Failed`.
+    let mut broken = false;
     move |msg: CanonicalMessage, ctx: &HandlerContext| {
         trace_received("pal_speak", &msg);
         let Some((turn, what)) = ToSpeaker::from_message(&msg) else {
@@ -69,11 +71,12 @@ pub fn speak(speaker: Receiver<PocketSpeaker>, language: Language, report: Repor
             report(Spoken::Failed { turn: turn.to_string(), error: "the voice did not load".into() });
             return Ok(Handled::Ack);
         };
-        let mut say = |text: String| {
-            if let Err(e) = speaker.say(&pronounced(&text, language)) {
-                eprintln!("llm_pal: {e}");
+        let mut say = |text: String| match speaker.say(&pronounced(&text, language)) {
+            Ok(()) => report(Spoken::Said { turn: turn.to_string(), text, at: Instant::now() }),
+            Err(e) => {
+                broken = true;
+                report(Spoken::Failed { turn: turn.to_string(), error: e.to_string() });
             }
-            report(Spoken::Said { turn: turn.to_string(), text, at: Instant::now() });
         };
         let holding = held.as_ref().is_some_and(|h| h.turn == turn);
         match what {
@@ -81,7 +84,7 @@ pub fn speak(speaker: Receiver<PocketSpeaker>, language: Language, report: Repor
             ToSpeaker::Release if holding => {
                 let h = held.take().expect("holding");
                 h.sentences.into_iter().for_each(&mut say);
-                if h.done {
+                if h.done && !broken {
                     report(Spoken::Done { turn: h.turn });
                 }
             }
@@ -92,7 +95,8 @@ pub fn speak(speaker: Receiver<PocketSpeaker>, language: Language, report: Repor
             ToSpeaker::Sentence(text) if holding => held.as_mut().expect("holding").sentences.push(text),
             ToSpeaker::Sentence(text) => say(text),
             ToSpeaker::End if holding => held.as_mut().expect("holding").done = true,
-            ToSpeaker::End => report(Spoken::Done { turn: turn.to_string() }),
+            ToSpeaker::End if !broken => report(Spoken::Done { turn: turn.to_string() }),
+            ToSpeaker::End => {}
             ToSpeaker::Error(error) => {
                 if holding {
                     held = None;

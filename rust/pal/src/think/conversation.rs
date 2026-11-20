@@ -43,7 +43,8 @@ pub struct AgentConfig {
     pub user_name: String,
     /// A server answers instead of `llm_model`, which then isn't loaded unless `fallback` is set.
     pub remote: Option<RemoteConfig>,
-    /// With `remote`, the local model answers when the server fails.
+    /// With `remote`, the local model answers when the server fails before any text; a reply that breaks off
+    /// after some text is not answered again.
     pub fallback: bool,
     /// Party mode: Pal answers only when called by name or asked for a joke, and speaks up when the room's talk
     /// stops.
@@ -344,12 +345,17 @@ impl<'a> Conversation<'a> {
         };
         let persona = Persona::kitt(cfg.language, &cfg.user_name);
         let (speaker_tx, speaker_rx) = channel();
-        let mut transport =
-            Transport::start(rt.handle().clone(), brain, persona.fixed_messages(), speaker_rx, cfg.language)?;
-        took(if local { "llm loaded" } else { "llm routes ready" });
-        transport.prefill(&persona.context())?;
-        let stt = joined(stt, Error::Stt)?;
-        let speaker = joined(pocket, Error::Tts)?;
+        let transport =
+            Transport::start(rt.handle().clone(), brain, persona.fixed_messages(), speaker_rx, cfg.language).and_then(
+                |t| {
+                    took(if local { "llm loaded" } else { "llm routes ready" });
+                    t.prefill(&persona.context())?;
+                    Ok(t)
+                },
+            );
+        // Both loaders finish before any error returns, so none outlives the runtime or overlaps a restart.
+        let (stt, speaker) = (joined(stt, Error::Stt), joined(pocket, Error::Tts));
+        let (mut transport, stt, speaker) = (transport?, stt?, speaker?);
         let _ = speaker_tx.send(speaker.clone());
         let _ = shared.output.set(speaker.output());
         // Waits until the first prompt, which is slow, has left the system prompt in the LLM's cache.
@@ -596,6 +602,10 @@ impl<'a> Conversation<'a> {
 
     /// Transcribes the speech and picks the reply; `None` if there is nothing to answer.
     fn speech(&mut self, seg: Segment, early: bool, t0: Instant, tags_before: &ProsodyTags) -> Option<Prepared> {
+        // `seg.pcm` already starts with the carry; a final segment uses it up, whatever its transcript.
+        if !early {
+            self.carry = None;
+        }
         let text = match self.transport.transcribe(&seg.pcm) {
             Ok(text) => text,
             Err(e) => {
@@ -621,7 +631,6 @@ impl<'a> Conversation<'a> {
                 self.carry = Some(seg.pcm);
                 return None;
             }
-            self.carry = None;
         }
         let tags = prosody_tags::format(&self.tags.tag(&seg.features), self.cfg.language);
         let line = Persona::user_line(&text, &tags);
@@ -674,6 +683,10 @@ impl<'a> Conversation<'a> {
         let mut held = p.early;
         let mut f = Followed { spoken: Vec::new(), ended: p.ended, first_piece: None, first_sentence: None };
         while !self.quit() {
+            // `run` reports the lost microphone; a held reply would wait for its segment forever.
+            if self.transport.mic_lost() {
+                return None;
+            }
             let Some(input) = self.recv(held) else {
                 self.resume_if_quiet();
                 continue;
@@ -706,13 +719,14 @@ impl<'a> Conversation<'a> {
                 Input::Event(event) if !held => self.events.push_back(event),
                 Input::Event(Event::Resume) => return None,
                 Input::Event(Event::Segment(end)) => {
+                    let arrived = Instant::now();
                     if !end.turn_complete && sounds_unfinished(&p.text, self.cfg.language) && self.goes_on() {
                         self.carry = Some([self.carry.take().unwrap_or_default(), end.pcm].concat());
                         return None;
                     }
                     self.carry = None;
                     (self.send)(AgentEvent::Heard(p.line.clone()));
-                    f.ended = Some(speech_end(Instant::now(), &end));
+                    f.ended = Some(speech_end(arrived, &end));
                     held = false;
                     if let Err(e) = self.transport.release(turn) {
                         eprintln!("llm_pal: {e}");

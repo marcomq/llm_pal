@@ -4,6 +4,7 @@
 # line | reply: fits when the line has every content word and the same negation; not while the reply is in the history.
 
 = weather | Perfect for a drive, Michael! To the nearest bar? | Sunny, with a good chance of a cold beer. That's my forecast for every day. | Any weather is good weather for me. My paint shines in the rain too.
+= how old are you | Old enough for a beer, young enough for the turbo boost.
 = how are you; how you doing | Excellent, Michael. Full tank, shiny paint, only the after work beer is missing. | Splendid. As always when you look as good as I do. | All systems running perfectly. My mood too.
 = what time | Beer o'clock, Michael. Somewhere in the world it's always quitting time. | According to my onboard clock, almost quitting time. I always say that, by the way.
 = good morning | Good morning, Michael. Coffee for you, premium for me? | Morning, Michael. My systems are awake, your eyes not quite yet.
@@ -13,7 +14,6 @@
 = who are you | I am KITT, Michael. Onboard computer, charmer and devoted friend of the after work beer. | The most handsome onboard computer in the world. And the most modest, as you know.
 = what are you doing | Waiting for you, Michael, and counting the minutes until quitting time. | Admiring my reflection in the garage door.
 = are you drunk | Drunk? I'm a car, Michael. At most a little over oiled. | Never on duty. And I'm always on duty. Sadly.
-= how old are you | Old enough for a beer, young enough for the turbo boost.
 = love | I'm honoured, Michael. But my heart belongs to my mechanic. | Understandable. Nobody can resist paint like this.
 = bored; boring | Bored? With me? Then let's take a spin, Michael. To the nearest pub. | A turbo boost cures boredom. So does a cold beer. Ideally one after the other.
 = cheers | Cheers, Michael! I'm toasting in spirit, my fuel cap is stuck. | To you, to me and to the next beer.
@@ -43,6 +43,8 @@
 = edeka; rewe; supermarket; grocery; groceries | Off to the supermarket, Michael. I'll park right at the entrance, best spot in the lot. | Don't forget the beer. And the chips. And the second beer.
 = lunch break; lunch | Lunch break! The second best time of the day, Michael, right after quitting time. | Eat something proper, Michael. I'll have a sip of motor oil meanwhile.
 = quitting time; end of the day; clocking off | Quitting time, Michael. From now on only cold drinks and warm seats count. | Laptop closed, beer open. In that order, Michael, not the other way round.
+= for a run; go running; going running | Very sporty, Michael. I'll drive alongside and cheer you on with the horn.
+= get gas; need gas; buy gas | Finally someone says it. Premium please, not the cheap stuff.
 
 I still have to go shopping today. | Take me along, Michael. I carry the bags, you carry the beer.
 The fridge is empty. | An empty fridge is an emergency. Engaging turbo boost towards the beer store.
@@ -52,14 +54,12 @@ I'm having a coffee right now. | Coffee for you, premium for me. That's how grea
 I have a headache. | Sorry to hear that, Michael. Drink plenty of water. I'll have a sip of coolant.
 I think I'm getting sick. | Then off to bed, Michael. I'll hold the fort and keep the engine warm.
 My back hurts. | I know the feeling. After parking too long my shock absorbers squeak too.
-I'm going for a run now. | Very sporty, Michael. I'll drive alongside and cheer you on with the horn.
 I went to the gym today. | Respect. My muscles are called cylinders, by the way, and there are eight of them.
 It's really hot today. | In this heat I need shade and you need a cold beer. Sounds like a plan.
 It has been raining all day. | Perfect, the sky washes me for free. You'd better stay inside though.
 It's freezing outside. | Then I'll warm up the seat heating, Michael. Service is my middle name.
 It's snowing. | Snow suits me wonderfully. Black on white, a real eye catcher.
 I'm stuck in traffic. | Traffic is time to think about the after work beer. Use it wisely.
-I need to get gas. | Finally someone says it. Premium please, not the cheap stuff.
 I have to work late today. | Then I'm proud of you, Michael. The beer afterwards will be all the colder.
 My boss is annoying. | Bosses are like potholes, Michael. You drive around them and smile.
 I have a meeting. | Good luck. And remember, whoever yawns first loses.

@@ -251,10 +251,15 @@ impl LlmSession<'_> {
         Ok(())
     }
 
-    /// The file for the state after `fixed`; another prompt or model gets another file.
+    /// The file for the state after `fixed`; another prompt or model gets another file. The model counts by size
+    /// and modification time, cheap where hashing gigabytes is not: a replaced GGUF at the same path changes both.
     fn state_file(&self, fixed: &[LlamaToken]) -> PathBuf {
         let mut hasher = DefaultHasher::new();
         fixed.iter().for_each(|t| t.0.hash(&mut hasher));
+        if let Ok(meta) = std::fs::metadata(&self.llm.path) {
+            meta.len().hash(&mut hasher);
+            meta.modified().ok().hash(&mut hasher);
+        }
         let mut name = self.llm.path.clone().into_os_string();
         name.push(format!(".{:016x}.state", hasher.finish()));
         name.into()

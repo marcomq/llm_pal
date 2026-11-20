@@ -40,9 +40,17 @@ case "${1:-}" in
     test) (cd rust && cargo test --release --workspace -- --include-ignored --skip reply:: --skip download_models) ;;
     godot) run_godot ;;
     android) build_android ;;
-    # Own voices (e.g. kitt) are never downloaded, so they go onto the phone here.
-    install) build_android && adb install -r "$APK" \
-        && if [ -d models/pocket/voices ]; then adb shell mkdir -p "$PHONE_MODELS/pocket" \
-            && adb push models/pocket/voices "$PHONE_MODELS/pocket/"; fi ;;
+    # A standalone call, so `set -e` stops on a failed build instead of installing an old APK.
+    install) build_android
+        adb install -r "$APK"
+        # Own voices (e.g. kitt) are never downloaded, so they go onto the phone here, into the folder the app
+        # made: one made by adb belongs to the shell user and the app could not write into it.
+        if [ -d models/pocket/voices ]; then
+            if adb shell test -d "$PHONE_MODELS/pocket"; then
+                adb push models/pocket/voices "$PHONE_MODELS/pocket/"
+            else
+                echo "start Pal once so it creates $PHONE_MODELS/pocket, then install again for the own voices" >&2
+            fi
+        fi ;;
     *) echo "usage: $0 setup | test | godot | android | install" >&2; exit 1 ;;
 esac
