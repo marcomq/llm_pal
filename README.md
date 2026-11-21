@@ -51,4 +51,10 @@ their personality rights. To get a character's style, have a consenting person s
 recordings or voices (no repository, APK or download; `models/` is git-ignored), and don't use a cloned voice so
 that others take it for the real person. This is not legal advice; when in doubt, use only your own voice.
 
-License: MIT OR Apache-2.0. Silero VAD: MIT. Smart Turn: BSD-2-Clause. Parakeet TDT: CC-BY-4.0. Qwen3.5: Apache-2.0. Pocket TTS code: MIT (check the Kyutai model card for the weights). No GPL.
+License: MIT OR Apache-2.0. Silero VAD: MIT. Smart Turn: BSD-2-Clause. Parakeet TDT: CC-BY-4.0 (see below). Qwen3.5: Apache-2.0. Pocket TTS code: MIT (check the Kyutai model card for the weights). No GPL.
+
+Speech recognition uses [Parakeet TDT 0.6B v3](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3) by NVIDIA, licensed
+under [CC-BY-4.0](https://creativecommons.org/licenses/by/4.0/). Pal uses the int8 ONNX conversion by istupakov
+([pinned revision](https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/tree/8f23f0c03c8761650bdb5b40aaf3e40d2c15f1ce),
+also CC-BY-4.0) without further changes. The model is not part of this repository or the APK; the app downloads it from
+Hugging Face and checks its sha256.
