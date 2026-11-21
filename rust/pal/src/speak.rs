@@ -1,8 +1,8 @@
 //! Text to sound.
 //!
 //! ```text
-//! handlers::split   tokens → sentences (sentences.rs)
-//! handlers::speak   holds a reply until released, pauses on barge-in;
+//! handlers::speak   tokens → sentences (sentences.rs);
+//!                   holds a reply until released, pauses on barge-in;
 //!                   digits → words (numbers.rs) → tts::PocketSpeaker::say
 //!                        thread: Pocket TTS → voice_filter → leveler
 //!                        thread: playback.rs → loudspeaker, echo reference for hear::echo

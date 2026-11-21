@@ -1,6 +1,6 @@
 //! Time to the first answer, measured over the topics. The test plays the microphone and the voice: speech events
 //! go to `[pal.inbox]` as the microphone sends them, the conversation and the reply routes run as `deploy` connects
-//! them, and the test reads `[pal.speech]` in place of the voice. With the models:
+//! them, and the test reads `[pal.speech]` and cuts its tokens into sentences in place of the voice. With the models:
 //! `cargo test --release -p pal --lib perf -- --ignored --nocapture`, with `RUST_LOG=pal=debug` also the LLM's times.
 
 use std::cell::RefCell;
@@ -21,9 +21,9 @@ use crate::hear::event::Features;
 use crate::speak::handlers;
 use crate::think::brain::{self, Model};
 use crate::think::persona::DEFAULT_NAME;
-use crate::transport::{End, LLM_IN, LlmRequest, PIECES, Report, SPEECH, ToSpeaker, Token, emitter};
+use crate::transport::{End, LLM_IN, LlmRequest, Report, SPEECH, ToSpeaker, Token, emitter};
 
-const ROUTES: [&str; 4] = ["perf_conversation", "perf_llm", "perf_split", "perf_voice"];
+const ROUTES: [&str; 3] = ["perf_conversation", "perf_llm", "perf_voice"];
 const LANG: Language = Language::German;
 const QUESTION: &str = "Erzähl mir etwas über Vulkane in Island.";
 
@@ -71,10 +71,27 @@ impl Pal {
             }
             llm.handle(msg, ctx)
         };
-        let llm = ThreadedHandler::with_emitter(llm, rt.block_on(emitter(PIECES)).unwrap());
-        let split = ThreadedHandler::with_emitter(handlers::split(LANG, report), rt.block_on(emitter(SPEECH)).unwrap());
+        let llm = ThreadedHandler::with_emitter(llm, rt.block_on(emitter(SPEECH)).unwrap());
+        let (speech_tx, speech) = channel();
+        let mut split = handlers::Split::new(LANG);
+        let voice = ThreadedHandler::new(move |msg: CanonicalMessage, _: &HandlerContext| {
+            let send = |turn: &str, what| drop(speech_tx.send((Instant::now(), turn.to_string(), what)));
+            match ToSpeaker::from_message(&msg) {
+                Some((turn, ToSpeaker::Piece(token))) => {
+                    for sentence in split.sentences(&token, &report) {
+                        send(&turn, ToSpeaker::Piece(Token::piece(&turn, 0, &sentence)));
+                    }
+                    if token.end == Some(End::Failed) {
+                        send(&turn, ToSpeaker::Piece(token));
+                    }
+                }
+                Some((turn, what)) => send(&turn, what),
+                None => {}
+            }
+            Ok(Handled::Ack)
+        });
         let llm_cancel = llm.cancel_handle();
-        let cancels = vec![llm.cancel_handle(), split.cancel_handle()];
+        let cancels = vec![llm.cancel_handle(), voice.cancel_handle()];
 
         let cfg = AgentConfig {
             model_dir,
@@ -104,21 +121,12 @@ impl Pal {
             c.handle(input).expect("the conversation goes on");
             Ok(Handled::Ack)
         };
-        let (speech_tx, speech) = channel();
-        let voice = move |msg: CanonicalMessage, _: &HandlerContext| {
-            if let Some((turn, what)) = ToSpeaker::from_message(&msg) {
-                let _ = speech_tx.send((Instant::now(), turn, what));
-            }
-            Ok(Handled::Ack)
-        };
         let topic = |name| Endpoint::new_memory(name, 1024);
         let deployed = rt.block_on(async {
             let conversation = ThreadedHandler::new(conversation);
             Route::new(transport::inbox(), Endpoint::null()).with_handler(conversation).deploy(ROUTES[0]).await?;
             Route::new(topic(LLM_IN), Endpoint::null()).with_handler(llm).deploy(ROUTES[1]).await?;
-            Route::new(topic(PIECES), Endpoint::null()).with_handler(split).deploy(ROUTES[2]).await?;
-            let voice = ThreadedHandler::new(voice);
-            Route::new(topic(SPEECH), Endpoint::null()).with_handler(voice).deploy(ROUTES[3]).await
+            Route::new(topic(SPEECH), Endpoint::null()).with_handler(voice).deploy(ROUTES[2]).await
         });
         deployed.unwrap();
         Self { rt, inbox, speech, prefilled, events, asked, llm: llm_cancel, over: RefCell::default(), _turn: turn }
@@ -157,9 +165,9 @@ impl Pal {
                     held = None;
                     self.over.borrow_mut().insert(turn);
                 }
-                ToSpeaker::Sentence(text) if holding => waiting.push(text),
-                ToSpeaker::Sentence(text) => break (at, turn, text),
-                ToSpeaker::Error(e) => panic!("the reply failed: {e}"),
+                ToSpeaker::Piece(Token { end: None, text, .. }) if holding => waiting.push(text),
+                ToSpeaker::Piece(Token { end: None, text, .. }) => break (at, turn, text),
+                ToSpeaker::Piece(Token { end: Some(End::Failed), text, .. }) => panic!("the reply failed: {text}"),
                 _ => {}
             }
         };

@@ -188,12 +188,19 @@ impl Agent {
 }
 
 impl Drop for Agent {
+    /// Waits for the models to be released: llama.cpp aborts the process if it exits with Metal buffers still alive.
     fn drop(&mut self) {
         self.stop();
+        let deadline = Instant::now() + STOP_WAIT;
+        while !self.worker.is_finished() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
     }
 }
 
 const LIVE_TIMEOUT: Duration = Duration::from_secs(5);
+/// How long closing the app waits for the agent's thread, so a stuck one can't keep the app open.
+const STOP_WAIT: Duration = Duration::from_secs(10);
 
 /// The agent's thread: loads everything, connects it (`transport::deploy`) with the conversation as the handler of
 /// `[pal.inbox]` and waits until it ends, on `stop` or a lost microphone.
@@ -235,6 +242,10 @@ fn conversation_handler(
                 c.send(AgentEvent::Failed(e.to_string()));
             }
             voice.stop();
+            // A running reply would hold up its route's stop for seconds.
+            if let Phase::Replying(turn) = &c.phase {
+                c.transport.cancel(&turn.id);
+            }
             // Releases the models and the reply routes on this thread, before the runtime goes.
             conversation = None;
             let _ = ended_tx.send(());

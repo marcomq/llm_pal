@@ -80,7 +80,7 @@ Topics, routes and reports: the diagram at the top of `transport.rs`. What it do
   `interrupt`/`discard` cancel a turn in all routes.
 - The conversation reaches the voice only over `pal.speech`; the conversation's route handler (`conversation_handler`)
   keeps a `PocketSpeaker` clone only to cut it off at the end. `canned` sends a fixed text through the same path as the model.
-- **Tokens** on `pal.pieces` use mq-bridge's `stream_to` format for every source (server, local model, canned):
+- **Tokens** on `pal.speech` use mq-bridge's `stream_to` format for every source (server, local model, canned):
   `correlation_id` = turn, `mqb.stream.index`, `mqb.stream.end`; the last token's `mqb.stream.status` is
   `complete`, `error` (payload = error text) or `cancelled`.
 - `pal_tick` needs batch size 1, else `static` fills the whole batch at once.
@@ -111,7 +111,7 @@ Topics, routes and reports: the diagram at the top of `transport.rs`. What it do
 - `remote_llm.rs`: builds the mq-bridge endpoint: `openai_chat` with `messages_from_payload` for Ollama and OpenAI,
   the streaming `http_bulk` recipe for Anthropic's `/messages`. Both stream to `pal.llm.tokens` (`stream_to`) and
   stop on `pal.llm.cancel` (`cancel_from`, sent by `Transport::cancel`). `brain::Server` reads them back (`transport::StreamCall`)
-  and the `pal_llm` handler passes them on to `pal.pieces`. Timeout: 30 s per silence of the server, no overall timeout (streams may be long).
+  and the `pal_llm` handler passes them on to `pal.speech`. Timeout: 30 s per silence of the server, no overall timeout (streams may be long).
 - reqwest's platform verifier is not initialised on Android, so `remote_llm.rs` sets `tls.ca_file = "$.bundled"`
   (mq-bridge's built-in Mozilla roots) for every server.
 - The local fallback runs only if the server's last token is `error` at index 0 (no text) and the turn wasn't

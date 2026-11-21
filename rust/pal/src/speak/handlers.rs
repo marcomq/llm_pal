@@ -1,4 +1,4 @@
-//! The handlers of the transport's `pal_split` (tokens → sentences) and `pal_speak` (gate → voice) routes.
+//! The handler of the transport's `pal_speak` route: tokens → sentences → gate → voice.
 
 use std::time::Instant;
 
@@ -16,31 +16,30 @@ fn pronounced(text: &str, language: Language) -> String {
     language.profile().pronunciations.iter().fold(text, |t, (word, spoken)| t.replace(word, spoken))
 }
 
-pub fn split(language: Language, report: Report) -> impl BlockingHandler {
-    let mut sentences = Sentences::new(language);
-    let mut current = String::new();
-    move |msg: CanonicalMessage, ctx: &HandlerContext| {
-        trace_received("pal_split", &msg);
-        let token = Token::from_message(&msg);
-        // A cancelled turn ends without its last sentence, which is dropped here.
-        if token.turn != current {
-            sentences = Sentences::new(language);
-            current = token.turn.clone();
-            report(Spoken::FirstPiece { turn: current.clone(), at: Instant::now() });
+/// Cuts the tokens of the current turn into sentences.
+pub struct Split {
+    language: Language,
+    sentences: Sentences,
+    turn: String,
+}
+
+impl Split {
+    pub fn new(language: Language) -> Self {
+        Self { language, sentences: Sentences::new(language), turn: String::new() }
+    }
+
+    /// The sentences `token` completed. A cancelled turn ends without its last sentence, which is dropped here.
+    pub fn sentences(&mut self, token: &Token, report: &Report) -> Vec<String> {
+        if token.turn != self.turn {
+            self.sentences = Sentences::new(self.language);
+            self.turn = token.turn.clone();
+            report(Spoken::FirstPiece { turn: self.turn.clone(), at: Instant::now() });
         }
-        let (out, last) = match token.end {
-            Some(End::Complete) => (sentences.finish().into_iter().collect(), Some(ToSpeaker::End)),
-            Some(End::Failed) => (Vec::new(), Some(ToSpeaker::Error(token.text))),
-            Some(End::Cancelled) => (Vec::new(), None),
-            None => (sentences.push(&token.text), None),
-        };
-        for s in out {
-            ctx.emit(ToSpeaker::Sentence(s).to_message(&current))?;
+        match token.end {
+            Some(End::Complete) => self.sentences.finish().into_iter().collect(),
+            Some(_) => Vec::new(),
+            None => self.sentences.push(&token.text),
         }
-        if let Some(last) = last {
-            ctx.emit(last.to_message(&current))?;
-        }
-        Ok(Handled::Ack)
     }
 }
 
@@ -52,6 +51,7 @@ struct Held {
 }
 
 pub fn speak(mut speaker: PocketSpeaker, language: Language, report: Report) -> impl BlockingHandler {
+    let mut split = Split::new(language);
     let mut held: Option<Held> = None;
     // The speech thread is gone: nothing is said or done any more, each sentence reports `Failed`.
     let mut broken = false;
@@ -85,17 +85,25 @@ pub fn speak(mut speaker: PocketSpeaker, language: Language, report: Report) -> 
             ToSpeaker::Stop => speaker.stop(),
             ToSpeaker::Pause => speaker.pause(),
             ToSpeaker::Resume => speaker.resume(),
-            ToSpeaker::Sentence(_) if ctx.is_cancelled() => {}
-            ToSpeaker::Sentence(text) if holding => held.as_mut().expect("holding").sentences.push(text),
-            ToSpeaker::Sentence(text) => say(text),
-            ToSpeaker::End if holding => held.as_mut().expect("holding").done = true,
-            ToSpeaker::End if !broken => report(Spoken::Done { turn: turn.to_string() }),
-            ToSpeaker::End => {}
-            ToSpeaker::Error(error) => {
-                if holding {
-                    held = None;
+            ToSpeaker::Piece(token) => {
+                let sentences = split.sentences(&token, &report);
+                if !ctx.is_cancelled() {
+                    match held.as_mut().filter(|h| h.turn == turn) {
+                        Some(h) => h.sentences.extend(sentences),
+                        None => sentences.into_iter().for_each(&mut say),
+                    }
                 }
-                report(Spoken::Failed { turn: turn.to_string(), error });
+                match token.end {
+                    Some(End::Complete) if holding => held.as_mut().expect("holding").done = true,
+                    Some(End::Complete) if !broken => report(Spoken::Done { turn: turn.to_string() }),
+                    Some(End::Failed) => {
+                        if holding {
+                            held = None;
+                        }
+                        report(Spoken::Failed { turn: turn.to_string(), error: token.text });
+                    }
+                    _ => {}
+                }
             }
         }
         Ok(Handled::Ack)
