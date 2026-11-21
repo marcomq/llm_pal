@@ -10,7 +10,7 @@
 //!                                                                              ├──► caller pal_stt ──► Parakeet
 //!   prefill() read_ahead() reply() ──► [pal.llm]                               │
 //!                                          ▼                                   │
-//!                   route pal_llm (think::brain) ─── Prefilled ──► inbox       │
+//!                   route pal_llm (think::brain) ─ Prefilled, Failed ─► inbox  │
 //!                   the local model thread, or a server's tokens               │
 //!                   on [pal.llm.tokens]                                        │
 //!                            │ tokens                                          │
@@ -41,15 +41,16 @@
 
 mod messages;
 
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::Path;
 use std::sync::Arc;
 
-use mq_bridge::blocking_handler::{BlockingHandler, CancelHandle, ThreadedHandler};
+use mq_bridge::blocking_handler::{BlockingHandler, CancelHandle, HandlerContext, ThreadedHandler};
 use mq_bridge::endpoints::create_consumer_from_route;
 use mq_bridge::get_or_create_channel;
 use mq_bridge::models::{Endpoint, EndpointType, LimiterMiddleware, MemoryConfig, Middleware, StaticConfig};
 use mq_bridge::traits::{MessageConsumer, MessageDisposition, MessagePublisher};
-use mq_bridge::{Caller, CanonicalMessage, HandlerError, Publisher, Route};
+use mq_bridge::{Caller, CanonicalMessage, Handled, HandlerError, Publisher, Route};
 use tokio::runtime::Handle;
 
 pub use messages::{CORRELATION_ID, End, Input, LlmRequest, Report, Spoken, ToSpeaker, Token, trace_received};
@@ -57,7 +58,7 @@ pub use messages::{CORRELATION_ID, End, Input, LlmRequest, Report, Spoken, ToSpe
 use crate::hear::stt;
 use crate::speak::handlers;
 use crate::speak::tts::PocketSpeaker;
-use crate::think::brain::{self, Model, ModelThread, SERVER_CANCEL, Server};
+use crate::think::brain::{self, Model, ModelThread, SERVER_CANCEL, SERVER_TOKENS, Server};
 use crate::think::language::Language;
 use crate::think::local_llm::Message;
 use crate::think::remote_llm::RemoteConfig;
@@ -101,8 +102,8 @@ pub fn deploy<H: BlockingHandler>(
     let (model, model_thread) = model.unzip();
 
     // The reply side's handlers come first: the conversation needs their cancel handles. Each reports to
-    // [pal.inbox]: pal_llm `Prefilled`, pal_speak `FirstPiece`, `Said`, `Done`, `Failed`, the voice's playback
-    // `Audible`, `Quiet`.
+    // [pal.inbox]: pal_llm `Prefilled`, `Failed`, pal_speak `FirstPiece`, `Said`, `Done`, `Failed`, the voice's
+    // playback `Audible`, `Quiet`.
     let reply = rt.block_on(async {
         let inbox = publisher(INBOX).await?;
         let to_inbox = rt.clone();
@@ -115,9 +116,11 @@ pub fn deploy<H: BlockingHandler>(
             Some(config) => (Some(Server::start(config).await?), Some(publisher(SERVER_CANCEL).await?)),
             None => (None, None),
         };
-        let llm = ThreadedHandler::with_emitter(brain::handler(model, server, report.clone()), emitter(SPEECH).await?);
+        let llm = failure_ends_turn(brain::handler(model, server, report.clone()), report.clone());
+        let llm = ThreadedHandler::with_emitter(llm, emitter(SPEECH).await?);
         speaker.report_to(report.clone());
-        let speak = ThreadedHandler::new(handlers::speak(speaker, language, report));
+        let speak = failure_ends_turn(handlers::speak(speaker, language, report.clone()), report);
+        let speak = ThreadedHandler::new(speak);
         let routes = Routes {
             llm: publisher(LLM_IN).await?,
             speech: publisher(SPEECH).await?,
@@ -152,6 +155,21 @@ pub fn deploy<H: BlockingHandler>(
         rt.block_on(stop_routes());
     }
     deployed.map(|_| ())
+}
+
+/// Reports a handler's error or panic as `Spoken::Failed`: the route would only drop the message, and the
+/// conversation would wait for the turn's end forever.
+fn failure_ends_turn(mut handler: impl BlockingHandler, report: Report) -> impl BlockingHandler {
+    move |msg: CanonicalMessage, ctx: &HandlerContext| {
+        let turn = messages::turn_of(&msg);
+        let handled = catch_unwind(AssertUnwindSafe(|| handler.handle(msg, ctx)))
+            .unwrap_or_else(|_| Err(failed("the handler panicked")));
+        Ok(handled.unwrap_or_else(|e| {
+            eprintln!("llm_pal: {e}");
+            report(Spoken::Failed { turn, error: e.to_string() });
+            Handled::Ack
+        }))
+    }
 }
 
 /// A tick on `[pal.inbox]` about every 20 ms; one per batch, as a static source fills the whole batch at once.
@@ -301,7 +319,7 @@ pub fn stop_inbox(rt: &Handle) {
 
 /// The topics live as long as the process: what a stopped agent left in them must not reach the next one.
 pub(crate) fn clear_topics() {
-    for topic in [INBOX, LLM_IN, SPEECH] {
+    for topic in [INBOX, LLM_IN, SPEECH, SERVER_TOKENS, SERVER_CANCEL] {
         get_or_create_channel(&MemoryConfig::new(topic, Some(CAPACITY))).drain_messages();
     }
 }
@@ -405,4 +423,44 @@ async fn publisher(topic: &str) -> mq_bridge::anyhow::Result<Publisher> {
 
 pub(crate) async fn emitter(topic: &str) -> mq_bridge::anyhow::Result<Arc<dyn MessagePublisher>> {
     Ok(publisher(topic).await?.inner())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Mutex;
+
+    use mq_bridge::traits::Handler;
+
+    use super::*;
+
+    fn failures_of(handler: impl BlockingHandler, msg: CanonicalMessage) -> Vec<String> {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let log = seen.clone();
+        let report: Report = Arc::new(move |s| {
+            if let Spoken::Failed { turn, .. } = s {
+                log.lock().unwrap().push(turn);
+            }
+        });
+        let handler = ThreadedHandler::new(failure_ends_turn(handler, report));
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        assert!(matches!(rt.block_on(handler.handle(msg)), Ok(Handled::Ack)));
+        seen.lock().unwrap().clone()
+    }
+
+    #[test]
+    fn a_handler_error_or_panic_fails_its_turn() {
+        let token = || Token::piece("turn-1", 0, "x").to_message();
+        let error = |_: CanonicalMessage, _: &HandlerContext| Err(failed("gone"));
+        let panic =
+            |_: CanonicalMessage, _: &HandlerContext| -> std::result::Result<Handled, HandlerError> { panic!("boom") };
+        assert_eq!(failures_of(error, token()), ["turn-1"]);
+        assert_eq!(failures_of(panic, token()), ["turn-1"]);
+        assert_eq!(failures_of(error, ToSpeaker::Release.to_message("turn-2")), ["turn-2"]);
+    }
+
+    #[test]
+    fn a_handler_that_succeeds_reports_nothing() {
+        let fine = |_: CanonicalMessage, _: &HandlerContext| Ok(Handled::Ack);
+        assert!(failures_of(fine, Token::piece("turn-1", 0, "x").to_message()).is_empty());
+    }
 }

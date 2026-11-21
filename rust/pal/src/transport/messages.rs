@@ -31,6 +31,11 @@ fn meta<'a>(msg: &'a CanonicalMessage, key: &str) -> &'a str {
     msg.metadata.get(key).map_or("", String::as_str)
 }
 
+/// The turn of a data or control message; empty for a message of no turn, such as a prefill.
+pub(super) fn turn_of(msg: &CanonicalMessage) -> String {
+    Some(meta(msg, CORRELATION_ID)).filter(|turn| !turn.is_empty()).unwrap_or(meta(msg, TURN)).to_string()
+}
+
 /// Logs a message as it reaches `route`, with its age: the time since its id was made.
 pub fn trace_received(route: &str, msg: &CanonicalMessage) {
     if !tracing::enabled!(tracing::Level::TRACE) {
