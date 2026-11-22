@@ -3,6 +3,7 @@
 
 use crate::conversation::{Agent, AgentConfig, AgentEvent, State};
 use crate::speak::fish::FishConfig;
+use crate::think::character::Character;
 use crate::think::language::Language;
 use crate::think::persona::DEFAULT_NAME;
 use crate::think::remote_llm::{Provider, RemoteConfig};
@@ -60,6 +61,12 @@ pub struct PalNode {
     /// GGUF file name in the model dir; takes effect on `start`.
     #[export]
     llm_model: GString,
+    /// The next real `start` deletes the saved prompt states first: the model or a character has changed.
+    #[var]
+    clear_llm_cache: bool,
+    /// A character file for `language`, empty for the built-in one; takes effect on `start`.
+    #[var]
+    persona_file: GString,
     /// Parakeet TDT folder in the model dir; takes effect on `start`.
     #[export]
     stt_model: GString,
@@ -102,6 +109,8 @@ impl INode for PalNode {
             barge_in: true,
             smart_turn: true,
             llm_model: "Qwen3.5-2B-Q4_K_M.gguf".into(),
+            clear_llm_cache: false,
+            persona_file: GString::new(),
             stt_model: "parakeet-tdt-0.6b-v3".into(),
             user_name: DEFAULT_NAME.into(),
             llm_provider: "local".into(),
@@ -183,6 +192,9 @@ impl PalNode {
             return;
         }
         let dir = std::path::PathBuf::from(model_dir.to_string());
+        if std::mem::take(&mut self.clear_llm_cache) {
+            let _ = crate::downloader::remove_llm_caches(&dir).inspect_err(|e| eprintln!("llm_pal: {e}"));
+        }
         let Some(language) = Language::from_code(&self.language.to_string()) else {
             let message = format!("unknown language {}", self.language);
             self.signals().failed().emit(&message);
@@ -221,6 +233,7 @@ impl PalNode {
             remote,
             fallback: self.llm_fallback,
             party: self.party_mode,
+            persona: (!self.persona_file.is_empty()).then(|| self.persona_file.to_string().into()),
         }));
     }
 
@@ -231,6 +244,32 @@ impl PalNode {
             agent.stop();
             self.stopping = Some(agent);
         }
+    }
+
+    /// What is wrong with a character file, empty if it can be used.
+    #[func]
+    fn persona_error(path: GString, language: GString) -> GString {
+        let Some(language) = Language::from_code(&language.to_string()) else {
+            return format!("unknown language {language}").as_str().into();
+        };
+        let path = std::path::PathBuf::from(path.to_string());
+        Character::from_file(&path, language).err().unwrap_or_default().as_str().into()
+    }
+
+    /// The built-in character as a text file to edit.
+    #[func]
+    fn persona_template(language: GString) -> GString {
+        Language::from_code(&language.to_string()).map(Character::template).unwrap_or_default().as_str().into()
+    }
+
+    /// Deletes a catalog LLM other than the one in use, with its cache files.
+    #[func]
+    fn remove_llm(&self, model_dir: GString, name: GString) -> bool {
+        if name == self.llm_model {
+            return false;
+        }
+        let dir = std::path::PathBuf::from(model_dir.to_string());
+        crate::downloader::remove_llm(&dir, &name.to_string()).inspect_err(|e| eprintln!("llm_pal: {e}")).is_ok()
     }
 
     /// One of the state constants.

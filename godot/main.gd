@@ -19,9 +19,17 @@ const CENTER_ROWS := 8
 const SIDE_ROWS := 6
 const TEXTS := {
 	"de": {"loading": "lädt Modelle …", "listening": "hört zu", "thinking": "denkt nach", "speaking": "spricht",
-		"stopped": "gestoppt", "error": "Fehler: ", "no_mic": "kein Zugriff aufs Mikrofon"},
+		"stopped": "gestoppt", "error": "Fehler: ", "no_mic": "kein Zugriff aufs Mikrofon",
+		"model_failed": "neues Modell lief nicht, zurück zum alten",
+		"persona_failed": "Persönlichkeit nicht lesbar, nutze KITT: %s",
+		"remove_title": "Altes Modell löschen?", "remove_text": "%s löschen und %s GB freigeben?",
+		"remove": "Löschen", "keep": "Behalten"},
 	"en": {"loading": "loading models …", "listening": "listening", "thinking": "thinking", "speaking": "speaking",
-		"stopped": "stopped", "error": "Error: ", "no_mic": "no access to the microphone"},
+		"stopped": "stopped", "error": "Error: ", "no_mic": "no access to the microphone",
+		"model_failed": "the new model didn't run, back to the old one",
+		"persona_failed": "can't read the personality, using KITT: %s",
+		"remove_title": "Delete the old model?", "remove_text": "Delete %s and free %s GB?",
+		"remove": "Delete", "keep": "Keep"},
 }
 
 @onready var pal: PalNode = $Pal
@@ -33,6 +41,8 @@ const TEXTS := {
 
 var _cfg := ConfigFile.new()
 var _settings: Settings
+var _removal: ConfirmationDialog
+var _start_note := ""
 var _party := false
 var _lang := "de"
 var _level := 0.0
@@ -51,9 +61,18 @@ func _ready() -> void:
 	language.text = _lang.to_upper()
 	_party = _cfg.get_value("user", "party", false)
 	_show_party()
-	pal.failed.connect(func(msg: String) -> void: _error = msg)
+	# Still on trial at launch: the last run never got ready with it, e.g. killed for lack of memory.
+	_back_to_last_model()
+	pal.failed.connect(func(msg: String) -> void:
+		if _back_to_last_model():
+			print("model failed: ", msg)
+			_restart.call_deferred()
+		else:
+			_error = msg)
 	pal.reply_failed.connect(func(msg: String) -> void: _error = msg)
-	pal.ready_to_listen.connect(func(device: String) -> void: print("listening: ", device))
+	pal.ready_to_listen.connect(func(device: String) -> void:
+		print("listening: ", device)
+		_model_works.call_deferred())
 	pal.heard.connect(func(text: String) -> void:
 		_error = ""
 		print("you: ", text))
@@ -91,15 +110,19 @@ func _start() -> void:
 	if OS.get_name() == "Android":
 		# Created by the app, so it owns the folder; one made by adb stays unreadable for it.
 		DirAccess.make_dir_recursive_absolute(ANDROID_MODELS)
-	_error = ""
+		for code in Settings.LANGUAGES:
+			DirAccess.make_dir_recursive_absolute(ANDROID_MODELS.path_join("pocket/voices").path_join(code))
+	_error = _start_note
+	_start_note = ""
 	pal.language = _lang
 	var llm := OS.get_environment("PAL_LLM")
-	if not llm.is_empty():
-		pal.llm_model = llm
+	pal.llm_model = llm if not llm.is_empty() else Settings.local_model(_cfg)
 	pal.smart_turn = OS.get_environment("PAL_SMART_TURN") != "0"
 	pal.barge_in = OS.get_environment("PAL_BARGE_IN") != "0"
 	pal.user_name = Settings.user_name(_cfg)
 	pal.party_mode = _party
+	pal.persona_file = _usable_persona()
+	pal.clear_llm_cache = _take_stale_cache()
 	pal.pocket_voice = Settings.voice(_cfg, _lang, _model_dir())
 	var fish: bool = Settings.voice_source(_cfg) == "fish"
 	pal.fish_api_key = _cfg.get_value("fish", "api_key", "") if fish else ""
@@ -113,6 +136,24 @@ func _start() -> void:
 	pal.start(_model_dir())
 
 
+func _take_stale_cache() -> bool:
+	var stale: bool = _cfg.get_value("llm", "cache_stale", false)
+	if stale:
+		_cfg.set_value("llm", "cache_stale", false)
+		_cfg.save(SETTINGS_PATH)
+	return stale
+
+
+## The chosen character file; if it broke since it was chosen, says so and returns "" for the built-in one.
+func _usable_persona() -> String:
+	var file := Settings.persona_path(_cfg, _lang, _model_dir())
+	var wrong: String = PalNode.persona_error(file, _lang) if not file.is_empty() else ""
+	if wrong.is_empty():
+		return file
+	_error = TEXTS[_lang]["persona_failed"] % wrong
+	return ""
+
+
 ## PAL_MODELS overrides the models/ folder next to the Godot project (desktop) or the app folder (Android).
 func _model_dir() -> String:
 	var dir := OS.get_environment("PAL_MODELS")
@@ -121,6 +162,59 @@ func _model_dir() -> String:
 	if OS.get_name() == "Android":
 		return ANDROID_MODELS
 	return ProjectSettings.globalize_path("res://").path_join("../models").simplify_path()
+
+
+## Undoes a model change that is still on trial; true if there was one.
+func _back_to_last_model() -> bool:
+	var last: String = _cfg.get_value("llm", "trying_from", "")
+	if last.is_empty():
+		return false
+	_cfg.set_value("llm", "local_model", last)
+	_cfg.set_value("llm", "trying_from", "")
+	_cfg.save(SETTINGS_PATH)
+	_start_note = TEXTS[_lang]["model_failed"]
+	return true
+
+
+## Pal is ready, so a model on trial works: only now may the one it replaced go, if the user agrees.
+func _model_works() -> void:
+	var old: String = _cfg.get_value("llm", "trying_from", "")
+	if not old.is_empty():
+		_cfg.set_value("llm", "replaced", old)
+		_cfg.set_value("llm", "trying_from", "")
+		_cfg.save(SETTINGS_PATH)
+	_offer_removal()
+
+
+func _offer_removal() -> void:
+	var old: String = _cfg.get_value("llm", "replaced", "")
+	if old.is_empty() or is_instance_valid(_removal) or not OS.get_environment("PAL_LLM").is_empty():
+		return
+	var file := FileAccess.open(_model_dir().path_join(old), FileAccess.READ)
+	if file == null or old == Settings.local_model(_cfg):
+		_forget_replaced()
+		return
+	var gb := String.num(file.get_length() / 1e9, 1)
+	var t: Dictionary = TEXTS[_lang]
+	_removal = ConfirmationDialog.new()
+	_removal.title = t["remove_title"]
+	_removal.dialog_text = t["remove_text"] % [old.get_basename(), gb.replace(".", ",") if _lang == "de" else gb]
+	_removal.dialog_autowrap = true
+	_removal.ok_button_text = t["remove"]
+	_removal.cancel_button_text = t["keep"]
+	_removal.confirmed.connect(func() -> void:
+		pal.remove_llm(_model_dir(), old)
+		_forget_replaced())
+	_removal.canceled.connect(_forget_replaced)
+	add_child(_removal)
+	_removal.popup_centered(Vector2i(int(size.x * 0.85), 0))
+
+
+func _forget_replaced() -> void:
+	_cfg.set_value("llm", "replaced", "")
+	_cfg.save(SETTINGS_PATH)
+	if is_instance_valid(_removal):
+		_removal.queue_free()
 
 
 
@@ -171,7 +265,7 @@ func _state_text(state: int) -> String:
 
 ## _input, not _unhandled_input: this Control consumes clicks and touches before they would get there.
 func _input(event: InputEvent) -> void:
-	if is_instance_valid(_settings):
+	if is_instance_valid(_settings) or is_instance_valid(_removal):
 		return
 	var key := event as InputEventKey
 	var click := event as InputEventMouseButton

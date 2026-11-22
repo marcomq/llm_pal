@@ -2,7 +2,7 @@
 //! `pal-voice <german|english> <sample.wav> <voice.safetensors> [probe.wav] [text]`.
 //! Reloads the written state the way Pal does and speaks a probe sentence with it.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::time::Instant;
 
@@ -14,11 +14,15 @@ fn main() -> Result<()> {
         eprintln!("usage: pal-voice <german|english> <sample.wav> <voice.safetensors> [probe.wav] [text]");
         std::process::exit(2);
     };
-    if !out.ends_with(".safetensors") {
+    let Some(stem) = out.strip_suffix(".safetensors") else {
         eprintln!("the voice file must end in .safetensors: {out}");
         std::process::exit(2);
+    };
+    let probe = rest.first().cloned().unwrap_or_else(|| format!("{stem}.probe.wav"));
+    if [sample, out].iter().any(|path| resolved(path) == resolved(&probe)) {
+        eprintln!("the probe would overwrite the recording or the voice: {probe}");
+        std::process::exit(2);
     }
-    let probe = rest.first().cloned().unwrap_or_else(|| out.replace(".safetensors", ".wav"));
     let text = rest.get(1).cloned().unwrap_or_else(|| default_text(language).into());
 
     let t = Instant::now();
@@ -31,6 +35,15 @@ fn main() -> Result<()> {
     let took = t.elapsed().as_secs_f32();
     println!("probe {seconds:.1}s in {took:.1}s ({:.1}x real time) -> {probe}", seconds / took);
     Ok(())
+}
+
+/// The real path, also for a file that doesn't exist yet.
+fn resolved(path: &str) -> PathBuf {
+    let path = Path::new(path);
+    path.canonicalize().unwrap_or_else(|_| {
+        let parent = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
+        parent.canonicalize().unwrap_or_else(|_| parent.into()).join(path.file_name().unwrap_or_default())
+    })
 }
 
 fn default_text(language: &str) -> &'static str {

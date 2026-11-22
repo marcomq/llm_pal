@@ -48,7 +48,7 @@ Example:
 ./voice.sh de samples/my_voice_de.wav anna
 ```
 
-The script writes `out/<name>_<language>.safetensors` and plays a probe sentence (`out/<name>_<language>.wav`).
+The script writes `out/<name>_<language>.safetensors` and plays a probe sentence (`out/<name>_<language>.probe.wav`).
 
 Switches as environment variables:
 

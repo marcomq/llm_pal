@@ -86,6 +86,7 @@ fn pal(t: &Topics, barge_in: bool) -> (Conversation, Receiver<AgentEvent>) {
         remote: None,
         fallback: false,
         party: false,
+        persona: None,
     };
     let persona = Persona::kitt(cfg.language, &cfg.user_name);
     let (tx, events) = channel();

@@ -4,7 +4,7 @@
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
-use crate::think::language::Language;
+use crate::think::persona::Persona;
 
 /// How long the room must be quiet after talk before Pal says something.
 const SILENCE: Duration = Duration::from_secs(5);
@@ -16,7 +16,8 @@ const ANSWER_WINDOW: Duration = Duration::from_secs(8);
 const ECHO_TAIL: Duration = Duration::from_millis(150);
 
 pub struct Party {
-    language: Language,
+    call_words: Vec<String>,
+    silence_prompt: String,
     /// Transcripts not meant for Pal since he last spoke.
     talk: VecDeque<String>,
     last_speech: Instant,
@@ -29,9 +30,10 @@ pub struct Party {
 }
 
 impl Party {
-    pub fn new(language: Language) -> Self {
+    pub fn new(persona: &Persona) -> Self {
         Self {
-            language,
+            call_words: persona.call_words().to_vec(),
+            silence_prompt: persona.silence_prompt().to_string(),
             talk: VecDeque::new(),
             last_speech: Instant::now(),
             question: None,
@@ -62,8 +64,7 @@ impl Party {
 
     /// True if `text` calls Pal by one of his names.
     pub fn called(&self, text: &str) -> bool {
-        let names = self.language.profile().call_words;
-        text.to_lowercase().split(|c: char| !c.is_alphanumeric()).any(|w| names.contains(&w))
+        text.to_lowercase().split(|c: char| !c.is_alphanumeric()).any(|w| self.call_words.iter().any(|n| n == w))
     }
 
     /// Someone speaks; the silence starts again after it.
@@ -96,17 +97,19 @@ impl Party {
     /// The model's prompt for a remark on `talk`.
     pub fn prompt(&self, talk: &[String]) -> String {
         let quoted: Vec<String> = talk.iter().map(|line| format!("\"{line}\"")).collect();
-        self.language.profile().silence_prompt.replace("{talk}", &quoted.join(" "))
+        self.silence_prompt.replace("{talk}", &quoted.join(" "))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::think::language::Language;
+    use crate::think::persona::DEFAULT_NAME;
 
     #[test]
     fn a_line_with_kitts_name_calls_him() {
-        let party = Party::new(Language::German);
+        let party = Party::new(&Persona::kitt(Language::German, DEFAULT_NAME));
         assert!(party.called("Kitt, wie spät ist es?"));
         assert!(party.called("Hey Kit."));
         assert!(!party.called("Wir brauchen noch Kittharz."));
@@ -114,7 +117,7 @@ mod tests {
 
     #[test]
     fn speech_right_after_a_question_answers_it() {
-        let mut party = Party::new(Language::German);
+        let mut party = Party::new(&Persona::kitt(Language::German, DEFAULT_NAME));
         party.replied("Soll ich das erklären?");
         party.speech();
         assert!(!party.addressed("Ja, gerne."), "over his voice");
@@ -131,7 +134,7 @@ mod tests {
 
     #[test]
     fn a_later_voice_stop_does_not_renew_an_old_question() {
-        let mut party = Party::new(Language::German);
+        let mut party = Party::new(&Persona::kitt(Language::German, DEFAULT_NAME));
         party.replied("Soll ich das erklären?");
         party.voice_ended();
         party.question = party.question.map(|at| at - ANSWER_WINDOW);
@@ -142,7 +145,7 @@ mod tests {
 
     #[test]
     fn no_answer_without_a_question_or_after_the_window() {
-        let mut party = Party::new(Language::German);
+        let mut party = Party::new(&Persona::kitt(Language::German, DEFAULT_NAME));
         party.replied("Das ist erledigt.");
         party.speech();
         assert!(!party.addressed("Ja, gerne."));
@@ -156,7 +159,7 @@ mod tests {
 
     #[test]
     fn talk_is_given_once_after_the_silence() {
-        let mut party = Party::new(Language::German);
+        let mut party = Party::new(&Persona::kitt(Language::German, DEFAULT_NAME));
         assert_eq!(party.quiet(), None);
         party.overhear("Das Essen ist gut.".into());
         assert_eq!(party.quiet(), None);
@@ -167,7 +170,7 @@ mod tests {
 
     #[test]
     fn answering_someone_forgets_the_talk() {
-        let mut party = Party::new(Language::English);
+        let mut party = Party::new(&Persona::kitt(Language::English, DEFAULT_NAME));
         party.overhear("Nice music.".into());
         party.forget();
         party.last_speech -= SILENCE;
@@ -176,7 +179,7 @@ mod tests {
 
     #[test]
     fn the_prompt_quotes_the_talk() {
-        let party = Party::new(Language::English);
+        let party = Party::new(&Persona::kitt(Language::English, DEFAULT_NAME));
         let prompt = party.prompt(&["Nice music.".into(), "Who chose it?".into()]);
         assert!(prompt.contains("\"Nice music.\" \"Who chose it?\""));
     }

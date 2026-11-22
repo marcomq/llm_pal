@@ -2,10 +2,12 @@
 
 use std::collections::VecDeque;
 use std::hash::{BuildHasher, RandomState};
+use std::path::Path;
 use std::time::Instant;
 
 use chrono::Local;
 
+use crate::think::character::Character;
 use crate::think::language::Language;
 use crate::think::local_llm::{Message, Role};
 use crate::think::placeholders;
@@ -32,17 +34,19 @@ pub struct Persona {
     /// The user's name, replacing [`DEFAULT_NAME`] in every text.
     name: String,
     /// Fixed sample turns after the system prompt; they show the tone better than a description.
-    examples: &'static [(&'static str, &'static str)],
+    examples: Vec<(String, String)>,
     /// All jokes in a random order; asked for one, Pal tells the next of them instead of letting the model retell it.
-    jokes: Vec<&'static str>,
+    jokes: Vec<String>,
     next_joke: usize,
-    joke_intros: &'static [&'static str],
-    joke_words: &'static [&'static str],
+    joke_intros: Vec<String>,
+    joke_words: Vec<String>,
+    call_words: Vec<String>,
+    silence_prompt: String,
     quips: Vec<Quip>,
     /// Per quip, how many of its answers were given, starting at a random count.
     quips_given: Vec<usize>,
     /// Fixed turns: a line saying every content word of one gets its reply word for word.
-    pool: Vec<(&'static str, &'static str)>,
+    pool: Vec<(String, String)>,
     filler: &'static [&'static str],
     history: VecDeque<(String, String)>,
     max_turns: usize,
@@ -52,34 +56,62 @@ pub struct Persona {
 
 impl Persona {
     pub fn kitt(language: Language, name: &str) -> Self {
-        let p = language.profile();
-        let (quips, pool) = parse_pool(p.pool);
+        Self::with(Character::built_in(language), language, name)
+    }
+
+    /// The character in `file`, or the built-in one if there is none or it can't be read.
+    pub fn load(file: Option<&Path>, language: Language, name: &str) -> Self {
+        let character = file.map(|f| Character::from_file(f, language)).transpose().unwrap_or_else(|e| {
+            eprintln!("llm_pal: persona: {e}");
+            None
+        });
+        Self::with(character.unwrap_or_else(|| Character::built_in(language)), language, name)
+    }
+
+    fn with(c: Character, language: Language, name: &str) -> Self {
+        let (quips, pool) = parse_pool(&c.replies);
         Self {
-            examples: p.examples,
-            jokes: shuffled(p.jokes.lines()),
-            joke_intros: p.joke_intros,
-            joke_words: p.joke_words,
+            examples: c.examples,
+            jokes: shuffled(c.jokes.lines()),
+            joke_intros: c.joke_intros,
+            joke_words: c.joke_words,
+            call_words: c.call_words,
+            silence_prompt: c.silence,
             quips_given: (0..quips.len()).map(|i| RandomState::new().hash_one(i) as usize).collect(),
             quips,
             pool,
-            filler: p.filler,
+            filler: language.profile().filler,
             name: name.to_string(),
             language,
-            ..Self::new(p.system_prompt.replace(DEFAULT_NAME, name))
+            ..Self::new(c.system.replace(DEFAULT_NAME, name))
         }
+    }
+
+    /// What calls Pal in party mode.
+    pub fn call_words(&self) -> &[String] {
+        &self.call_words
+    }
+
+    /// Party mode's prompt when the room goes quiet; `{talk}` is the quoted talk before.
+    pub fn silence_prompt(&self) -> &str {
+        &self.silence_prompt
     }
 
     /// A joke with a short intro if `transcript` asks for one, so it comes out word for word.
     pub fn joke(&mut self, transcript: &str) -> Option<String> {
         let asked = transcript.to_lowercase();
         let mut words = asked.split(|c: char| !c.is_alphanumeric());
-        if self.jokes.is_empty() || !words.any(|w| self.joke_words.contains(&w)) {
+        if self.jokes.is_empty() || !words.any(|w| self.joke_words.iter().any(|j| j == w)) {
             return None;
         }
         let i = self.next_joke;
         self.next_joke += 1;
-        let intro = self.joke_intros[i % self.joke_intros.len()];
-        Some(self.named(&format!("{intro} {}", self.jokes[i % self.jokes.len()])))
+        let joke = &self.jokes[i % self.jokes.len()];
+        let told = match self.joke_intros.is_empty() {
+            true => joke.clone(),
+            false => format!("{} {joke}", self.joke_intros[i % self.joke_intros.len()]),
+        };
+        Some(self.named(&told))
     }
 
     /// A fixed answer if `transcript` is a short line a quip knows; each time the next of its answers.
@@ -89,11 +121,18 @@ impl Persona {
         if words.len() > QUIP_MAX_WORDS {
             return None;
         }
-        let said = |trigger: &&str| trigger.split(' ').all(|w| words.contains(&w));
+        let name = self.name.to_lowercase();
+        let addressing = |w: &str| w == name || self.call_words.iter().any(|c| c == w);
+        let said = |trigger: &String| {
+            let whole = trigger.strip_prefix('!');
+            let wanted: Vec<&str> = whole.unwrap_or(trigger).split(' ').collect();
+            wanted.iter().all(|w| words.contains(w))
+                && (whole.is_none() || words.iter().all(|w| wanted.contains(w) || addressing(w)))
+        };
         let i = self.quips.iter().position(|q| q.triggers.iter().any(said))?;
         self.quips_given[i] += 1;
         let answers = &self.quips[i].answers;
-        let answer = self.named(answers[self.quips_given[i] % answers.len()]);
+        let answer = self.named(&answers[self.quips_given[i] % answers.len()]);
         Some(placeholders::fill(&answer, self.language, Local::now().naive_local(), self.started.elapsed()))
     }
 
@@ -101,11 +140,13 @@ impl Persona {
         Self {
             system: system.into(),
             name: DEFAULT_NAME.to_string(),
-            examples: &[],
+            examples: Vec::new(),
             jokes: Vec::new(),
             next_joke: 0,
-            joke_intros: &[],
-            joke_words: &[],
+            joke_intros: Vec::new(),
+            joke_words: Vec::new(),
+            call_words: Vec::new(),
+            silence_prompt: String::new(),
             quips: Vec::new(),
             quips_given: Vec::new(),
             pool: Vec::new(),
@@ -129,7 +170,7 @@ impl Persona {
             .iter()
             .filter(|(u, _)| negated(u) == negated(transcript))
             .filter(|(_, a)| self.history.iter().all(|(_, r)| *r != self.named(a)))
-            .map(|&(u, a)| (self.content_words(u), a))
+            .map(|(u, a)| (self.content_words(u), a))
             .filter(|(words, _)| !words.is_empty() && words.iter().all(|w| said.iter().any(|s| alike(s, w))))
             .min_by_key(|(words, _)| std::cmp::Reverse(words.len()))?;
         Some(self.named(reply))
@@ -173,7 +214,7 @@ impl Persona {
     /// Everything before the user's next line: system prompt, sample turns and history.
     pub fn context(&self) -> Vec<Message> {
         let mut m = vec![Message::new(Role::System, &self.system)];
-        for &(u, a) in self.examples {
+        for (u, a) in &self.examples {
             m.push(Message::new(Role::User, self.named(u)));
             m.push(Message::new(Role::Assistant, self.named(a)));
         }
@@ -210,20 +251,21 @@ impl Persona {
 /// A fixed answer to a common line. Each trigger is a set of lowercase words that must all occur; the answers take
 /// turns.
 struct Quip {
-    triggers: Vec<&'static str>,
-    answers: Vec<&'static str>,
+    triggers: Vec<String>,
+    answers: Vec<String>,
 }
 
 /// Splits a pool file into its quips (`= trigger; trigger | reply | reply`) and sample turns (`line | reply`).
-fn parse_pool(text: &'static str) -> (Vec<Quip>, Vec<(&'static str, &'static str)>) {
+fn parse_pool(text: &str) -> (Vec<Quip>, Vec<(String, String)>) {
     let (mut quips, mut turns) = (Vec::new(), Vec::new());
     for line in text.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')) {
         if let Some(quip) = line.strip_prefix('=') {
             let mut parts = quip.split('|').map(str::trim);
-            let triggers = parts.next().unwrap_or_default().split(';').map(str::trim).collect();
-            quips.push(Quip { triggers, answers: parts.collect() });
+            let triggers = parts.next().unwrap_or_default().split(';').map(str::trim);
+            let triggers = triggers.filter(|t| !t.is_empty()).map(str::to_lowercase).collect();
+            quips.push(Quip { triggers, answers: parts.map(String::from).collect() });
         } else if let Some((u, a)) = line.split_once('|') {
-            turns.push((u.trim(), a.trim()));
+            turns.push((u.trim().to_string(), a.trim().to_string()));
         }
     }
     (quips, turns)
@@ -241,8 +283,8 @@ fn alike(a: &str, b: &str) -> bool {
 }
 
 /// `n` random items, in random order.
-fn shuffled<'a>(items: impl Iterator<Item = &'a str>) -> Vec<&'a str> {
-    let mut items: Vec<_> = items.filter(|l| !l.trim().is_empty()).collect();
+fn shuffled<'a>(items: impl Iterator<Item = &'a str>) -> Vec<String> {
+    let mut items: Vec<String> = items.filter(|l| !l.trim().is_empty()).map(String::from).collect();
     let mut seed = RandomState::new().hash_one(0u8) | 1;
     for i in (1..items.len()).rev() {
         seed ^= seed << 13;
@@ -280,7 +322,7 @@ mod tests {
             assert_eq!(a.context().len(), a.fixed_messages(), "{language:?}");
             assert_eq!(a.context()[0].content, b.context()[0].content, "{language:?}");
             assert!(a.jokes.iter().all(|j| !a.system.contains(j)), "{language:?}");
-            let lines = language.profile().jokes.lines().filter(|l| !l.trim().is_empty()).count();
+            let lines = Character::built_in(language).jokes.lines().count();
             assert_eq!(a.jokes.len(), lines, "{language:?}");
         }
     }
@@ -291,7 +333,7 @@ mod tests {
         assert_eq!(p.joke("How are you?"), None);
         let (a, b) = (p.joke("Tell me a joke").unwrap(), p.joke("[question] Another JOKE?").unwrap());
         assert_ne!(a, b);
-        assert!(a.starts_with("Gladly, Michael.") && a.ends_with(p.jokes[0]));
+        assert!(a.starts_with("Gladly, Michael.") && a.ends_with(p.jokes[0].as_str()));
         assert!(Persona::kitt(Language::German, DEFAULT_NAME).joke("Erzähl einen Witz").is_some());
     }
 
@@ -359,10 +401,11 @@ mod tests {
             assert!(p.quip(line).is_some(), "{line}");
         }
         let mut p = Persona::kitt(Language::English, DEFAULT_NAME);
-        for line in ["What time does the train leave?", "What date is the meeting?"] {
+        for line in ["What time does the train leave?", "What date is the meeting?", "What's the date of the meeting?"]
+        {
             assert_eq!(p.quip(line), None, "{line}");
         }
-        for line in ["What time is it?", "What's the time?"] {
+        for line in ["What time is it?", "What's the time?", "What's the date?", "What's the date today, KITT?"] {
             assert!(p.quip(line).is_some(), "{line}");
         }
     }
@@ -392,10 +435,41 @@ mod tests {
     fn every_pool_line_has_a_turn() {
         for language in Language::ALL {
             let p = Persona::kitt(language, DEFAULT_NAME);
-            let lines = language.profile().pool.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#'));
-            assert_eq!(p.pool.len() + p.quips.len(), lines.count(), "{language:?}");
+            let lines = Character::built_in(language).replies.lines().filter(|l| !l.starts_with('#')).count();
+            assert_eq!(p.pool.len() + p.quips.len(), lines, "{language:?}");
             assert!(p.pool.iter().all(|(u, a)| !u.is_empty() && !a.is_empty()), "{language:?}");
         }
+    }
+
+    #[test]
+    fn kitt_says_what_the_name_stands_for() {
+        for (language, asked) in
+            [(Language::German, "Wofür steht KITT?"), (Language::English, "What does KITT stand for?")]
+        {
+            let reply = Persona::kitt(language, "Sam").quip(asked).unwrap();
+            assert!(reply.starts_with("Kinda Intelligent, Totally Thirsty, Sam."), "{reply}");
+        }
+    }
+
+    #[test]
+    fn a_character_from_a_file_replaces_the_built_in_one() {
+        let dir = std::env::temp_dir().join(format!("pal-persona-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("rosa.txt");
+        let text = "[system]\nYou are Rosa, kind to {name}.\n[jokes]\nA short joke.\n[replies]\n= hello | Hi, {name}.";
+        std::fs::write(&file, text).unwrap();
+        let mut p = Persona::load(Some(&file), Language::English, "Sam");
+        assert!(p.context()[0].content.starts_with("You are Rosa, kind to Sam."));
+        assert_eq!(p.joke("Tell me a joke").as_deref(), Some("A short joke."), "no intro in the file");
+        assert_eq!(p.quip("Hello").as_deref(), Some("Hi, Sam."));
+        assert_eq!(p.quip("What's the weather?"), None, "none of the built-in replies");
+        assert_eq!(p.call_words(), ["rosa"]);
+
+        std::fs::write(&file, "broken").unwrap();
+        let fallback = Persona::load(Some(&file), Language::English, "Sam");
+        assert!(fallback.context()[0].content.starts_with("You are KITT"));
+        assert!(Persona::load(Some(&dir.join("gone.txt")), Language::English, "Sam").call_words().len() > 1);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

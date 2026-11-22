@@ -51,7 +51,7 @@ conversation and with it the reply routes, the agent's thread stops the input si
 6. **User line**: `Persona::user_line(text, tags)`: transcript + prosody tags (`prosody_tags.rs`). The tags go
    last, so a line that grows keeps its start. This line goes into the history and the UI (`AgentEvent::Heard`).
 7. **Canned replies** (no LLM): `persona.joke`, `persona.quip`, `persona.pooled` in `persona.rs`. Texts in
-   `think/language/` (`jokes_*.txt`, `pool_*.txt`, `de.rs`, `en.rs`). `pooled` only matches lines negated
+   `think/language/` (`kitt_*.txt`, `de.rs`, `en.rs`). `pooled` only matches lines negated
    like the transcript. Quips may use `{time}`, `{weekday}`, `{date}`, `{duration}` (`think/placeholders.rs`, said per
    language by `Profile.clock`).
 8. **Enrichment**: `enrich::prompt_line(text, line, language)` in `think/enrich.rs`. Add lookups in
@@ -145,9 +145,17 @@ explicit consent; never add recordings or cloned voices to the repository or the
   `ready_to_listen`, `heard`, `said`, `turn_done`, `interrupted`, `ignored`, `failed`, `reply_failed`.
 - `main.gd`: `_start()` copies settings onto `PalNode`. The "…" label or key S opens the settings form; the P0/P1
   label or key P switches party mode (`user/party`).
-- `settings.gd` (`Settings`): saves to `user://settings.cfg` (sections `user` incl. `party`, `voice`, `fish`, `llm`); saving restarts Pal. An empty
+- `settings.gd` (`Settings`): saves to `user://settings.cfg` (sections `user` incl. `party`, `voice`, `persona`, `fish`, `llm`); saving restarts Pal. An empty
   URL means the provider default (in `settings.gd` and `remote_llm.rs`). An empty model is replaced by the provider's
   model default from `settings.gd` only; `remote_llm.rs` has no model default and sends the model as given.
+- Local models: `Settings.LOCAL_MODELS`, same files as `downloader.rs`, whose `ON_REQUEST` models are fetched only once
+  chosen (`llm/local_model`). A new one is on trial (`llm/trying_from`): `main.gd` goes back if it fails or the app
+  died before `ready_to_listen`; once it runs, `llm/replaced` makes it ask before `PalNode.remove_llm`.
+- Characters: `think/character.rs`, files in `personas/<de|en>/<name>.txt` in the model folder, chosen per language
+  (`persona/<lang>`, empty = built-in). A file gets the language's `Profile.tag_rule` added and none of KITT's texts.
+  `PalNode.persona_file`; a file that can't be read falls back to the built-in character (`persona_error`). The
+  built-in KITT is such a file too (`think/language/kitt_<lang>.txt`). Changing a model or character sets
+  `llm/cache_stale`: the next start deletes all `.state` files (`remove_llm_caches`), a language switch doesn't.
 - Environment: `PAL_MODELS` (models folder), `PAL_LLM` (GGUF file), `PAL_SMART_TURN=0`, `PAL_BARGE_IN=0`,
   `PAL_RECORD_DIR` (saves each segment as WAV + transcript, for STT test data).
 

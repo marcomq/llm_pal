@@ -17,21 +17,14 @@ pub struct Profile {
     pub pocket_model: &'static str,
     /// Synthesized once at start, so the first real sentence comes fast.
     pub warm_up: &'static str,
-    pub system_prompt: &'static str,
-    /// Fixed sample turns after the system prompt; they show the tone better than a description.
-    pub examples: &'static [(&'static str, &'static str)],
-    /// One joke per line.
-    pub jokes: &'static str,
-    pub joke_intros: &'static [&'static str],
-    /// Lowercase words that ask for a joke.
+    /// The built-in character, in the format of a character file (`character.rs`).
+    pub character: &'static str,
+    /// How to read the prosody tags, added to the prompt of every character.
+    pub tag_rule: &'static str,
+    /// Lowercase words that ask for a joke, for a character without its own.
     pub joke_words: &'static [&'static str],
-    /// Lowercase words that call Pal in party mode: his name as speech recognition writes it.
-    pub call_words: &'static [&'static str],
-    /// Party mode's prompt when the room goes quiet; `{talk}` is the quoted talk before.
+    /// Party mode's prompt when the room goes quiet, for a character without its own; `{talk}` is the quoted talk.
     pub silence_prompt: &'static str,
-    /// Fixed replies, one per line: `= trigger; trigger | reply | reply` for short lines, `line | reply` for sample
-    /// turns. `#` starts a comment line.
-    pub pool: &'static str,
     /// Lowercase words too common to tell which pool turns fit a line.
     pub filler: &'static [&'static str],
     /// Lowercase words after which a sentence goes on.

@@ -61,6 +61,16 @@ const CATALOG: &[Entry] = &[
         "bd258782e35f7f458f8aced1adc053e6e92e89bc735ba3be89d38a06121dc517",
     ),
     (
+        "Qwen3.5-4B-Q4_K_M.gguf",
+        "unsloth/Qwen3.5-4B-GGUF/resolve/e87f176479d0855a907a41277aca2f8ee7a09523/Qwen3.5-4B-Q4_K_M.gguf",
+        "00fe7986ff5f6b463e62455821146049db6f9313603938a70800d1fb69ef11a4",
+    ),
+    (
+        "Qwen3.5-9B-Q4_K_M.gguf",
+        "unsloth/Qwen3.5-9B-GGUF/resolve/3885219b6810b007914f3a7950a8d1b469d598a5/Qwen3.5-9B-Q4_K_M.gguf",
+        "03b74727a860a56338e042c4420bb3f04b2fec5734175f4cb9fa853daf52b7e8",
+    ),
+    (
         "pocket/kyutai/pocket-tts-without-voice-cloning/languages/german/model.safetensors",
         "kyutai/pocket-tts-without-voice-cloning/resolve/1e08e6a23401048648a9fdcfde2f89348215c2a7/languages/german/model.safetensors",
         "9fe42605604832349e3f495177bde56b77ae8fee73b2ed4b63236092ccde7621",
@@ -112,6 +122,9 @@ const CATALOG: &[Entry] = &[
     ),
 ];
 
+/// Larger LLMs, fetched only once chosen in the settings.
+const ON_REQUEST: &[&str] = &["Qwen3.5-4B-Q4_K_M.gguf", "Qwen3.5-9B-Q4_K_M.gguf"];
+
 /// The Parakeet folder's files.
 pub fn stt_files(folder: &str) -> Vec<String> {
     let prefix = format!("{folder}/");
@@ -131,9 +144,47 @@ pub fn pocket_files(language: Language, voice: &str) -> Vec<String> {
     vec![format!("{dir}/model.safetensors"), format!("{dir}/tokenizer.json"), voice]
 }
 
-/// Every file in the catalog, e.g. for `build.sh setup`.
+/// The catalog without the larger LLMs, e.g. for `build.sh setup`.
 pub fn all_files() -> Vec<String> {
-    CATALOG.iter().map(|(path, ..)| path.to_string()).collect()
+    CATALOG.iter().filter(|(path, ..)| !ON_REQUEST.contains(path)).map(|(path, ..)| path.to_string()).collect()
+}
+
+/// Deletes a catalog LLM with its saved prompt states and an unfinished download. Refuses any other file.
+pub fn remove_llm(dir: &Path, name: &str) -> Result<()> {
+    if !name.ends_with(".gguf") || !CATALOG.iter().any(|(path, ..)| *path == name) {
+        return Err(Error::Download(format!("{name} is not a catalog model")));
+    }
+    let failed = |e: std::io::Error| Error::Download(format!("removing {name}: {e}"));
+    let saved = format!("{name}.");
+    let mut files = vec![dir.join(name), dir.join(name).with_extension("part")];
+    for entry in std::fs::read_dir(dir).map_err(failed)? {
+        let file = entry.map_err(failed)?.file_name();
+        let file = file.to_string_lossy();
+        if file.starts_with(&saved) && (file.ends_with(".state") || file.ends_with(".tmp")) {
+            files.push(dir.join(file.as_ref()));
+        }
+    }
+    for file in files {
+        match std::fs::remove_file(file) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(failed(e)),
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+/// Deletes the saved prompt states of every model; they are made again on the next start.
+pub fn remove_llm_caches(dir: &Path) -> Result<()> {
+    let failed = |e: std::io::Error| Error::Download(format!("removing the LLM cache: {e}"));
+    for entry in std::fs::read_dir(dir).map_err(failed)? {
+        let entry = entry.map_err(failed)?;
+        let file = entry.file_name();
+        let file = file.to_string_lossy();
+        if file.contains(".gguf.") && (file.ends_with(".state") || file.ends_with(".tmp")) {
+            std::fs::remove_file(entry.path()).map_err(failed)?;
+        }
+    }
+    Ok(())
 }
 
 /// Downloads each of `files` (paths in `dir`) that is missing. A file not in the catalog must be there already.
@@ -222,5 +273,53 @@ mod tests {
         let own = format!("pocket/voices/{}/my_voice.safetensors", Language::ALL[0].code());
         assert_eq!(pocket_files(Language::ALL[0], "my_voice").last(), Some(&own));
         assert_eq!(SILERO.0, all_files()[0]);
+    }
+
+    #[test]
+    fn larger_models_are_not_part_of_the_setup() {
+        let files = all_files();
+        assert!(files.iter().any(|f| f == "Qwen3.5-2B-Q4_K_M.gguf"));
+        for model in ON_REQUEST {
+            assert!(CATALOG.iter().any(|(p, ..)| p == model), "{model}");
+            assert!(!files.iter().any(|f| f == model), "{model}");
+        }
+    }
+
+    #[test]
+    fn removing_the_caches_keeps_the_models() {
+        let dir = std::env::temp_dir().join(format!("pal-remove-caches-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let gone = ["a.gguf.01.state", "b.gguf.02.state", "b.gguf.03.tmp"];
+        let kept = ["a.gguf", "b.gguf", "b.part", "notes.state"];
+        for file in gone.iter().chain(&kept) {
+            std::fs::write(dir.join(file), b"x").unwrap();
+        }
+        remove_llm_caches(&dir).unwrap();
+        assert!(gone.iter().all(|f| !dir.join(f).exists()));
+        assert!(kept.iter().all(|f| dir.join(f).exists()));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn removing_a_model_takes_only_its_own_files() {
+        let dir = std::env::temp_dir().join(format!("pal-remove-llm-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let gone = [
+            "Qwen3.5-4B-Q4_K_M.gguf",
+            "Qwen3.5-4B-Q4_K_M.part",
+            "Qwen3.5-4B-Q4_K_M.gguf.0123.state",
+            "Qwen3.5-4B-Q4_K_M.gguf.0123.tmp",
+        ];
+        let kept = ["Qwen3.5-2B-Q4_K_M.gguf", "Qwen3.5-2B-Q4_K_M.gguf.0123.state", "mine.gguf"];
+        for file in gone.iter().chain(&kept) {
+            std::fs::write(dir.join(file), b"x").unwrap();
+        }
+        remove_llm(&dir, gone[0]).unwrap();
+        assert!(gone.iter().all(|f| !dir.join(f).exists()));
+        assert!(kept.iter().all(|f| dir.join(f).exists()));
+        assert!(remove_llm(&dir, "mine.gguf").is_err());
+        assert!(remove_llm(&dir, "../mine.gguf").is_err());
+        assert!(dir.join("mine.gguf").exists());
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

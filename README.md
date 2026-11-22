@@ -1,12 +1,16 @@
 # llm_pal
 
 Pal is a local voice companion written in Rust and running in Godot on macOS and Android. You talk, and Pal answers in
-character as KITT, with a voice. By default everything runs on the device: no cloud and no account. Only
-the optional servers you set up yourself (an LLM server, Fish Audio) receive data.
+character as KITT (**K**inda **I**ntelligent, **T**otally **T**hirsty), with a voice. By default everything runs on
+the device: no cloud and no account. Only the optional servers you set up yourself (an LLM server, Fish Audio) receive data.
 
 > **Disclaimer:** Pal is a private hobby project and not an official product. It is not affiliated with, endorsed by or
 > sponsored by Fish Audio, Kyutai, or the owners of Knight Rider or KITT. All names and trademarks belong to their
 > owners. The software comes without warranty; you are responsible for how you use it and for the voices you choose.
+>
+> **Parody:** Pal's default character is an unofficial, non-commercial parody of the talking car from 1980s television:
+> vain, thirsty and unreliable. It is not affiliated with or endorsed by the rights holders of the original series, and
+> it does not use its footage, music, logos or voices.
 
 Microphone → 16 kHz mono → Silero VAD → Smart Turn (end of turn) → speech segments and prosody → Parakeet TDT (STT, via mq-bridge-onnx) → Qwen3.5 2B (llama.cpp) →
 sentence streaming → Kyutai Pocket TTS.
@@ -37,6 +41,33 @@ Pal downloads missing models into its model folder on start, on the Mac and on A
 time).
 
 The UI starts in German; English is one tap away.
+
+## Larger models
+
+The settings offer Qwen3.5 2B (default), 4B (2.7 GB, 8 GB RAM or more) and 9B (5.7 GB, 12 GB RAM or more). A larger
+model is downloaded only after you choose and save it. If it doesn't start, Pal goes back to the previous one. Once it
+runs, Pal asks whether to delete the old model.
+
+## Personalities
+
+Each language has its own personality, chosen in the settings. The built-in character is always first in the list, so
+you can always go back to it. **Template** writes it as a text file to edit, **Load file** adds your own. Files live in
+`personas/<de|en>/<name>.txt` in the model folder. A language without a file keeps the built-in character.
+
+Only `[system]` is required. Sections you leave out stay empty:
+
+```text
+[system]
+You are Rosa, a calm gardener. Talk to {name} in one or two short sentences.
+
+[examples]
+I'm tired. | Then sit down for a moment, the tomatoes can wait.
+
+[call words]
+rosa
+```
+
+The template explains the other sections: `[jokes]`, `[joke intros]`, `[joke words]`, `[silence]` and `[replies]`.
 
 ## Fish Audio (optional)
 

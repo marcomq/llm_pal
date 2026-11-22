@@ -106,6 +106,7 @@ impl Pal {
             remote: None,
             fallback: false,
             party: false,
+            persona: None,
         };
         let persona = Persona::kitt(LANG, DEFAULT_NAME);
         let (events_tx, events) = channel();

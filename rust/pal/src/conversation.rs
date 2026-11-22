@@ -80,6 +80,8 @@ pub struct AgentConfig {
     /// Party mode: Pal answers only when called by name or asked for a joke, and speaks up when the room's talk
     /// stops.
     pub party: bool,
+    /// A character file for `language`; the built-in character without one or if it can't be read.
+    pub persona: Option<PathBuf>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -209,7 +211,7 @@ const STOP_WAIT: Duration = Duration::from_secs(10);
 /// `[pal.inbox]` and waits until it ends, on `stop` or a lost microphone.
 fn run(cfg: AgentConfig, shared: Arc<Shared>, events: Sender<AgentEvent>) -> Result<()> {
     let rt = tokio::runtime::Runtime::new().map_err(|e| Error::Routes(e.to_string()))?;
-    let persona = Persona::kitt(cfg.language, &cfg.user_name);
+    let persona = Persona::load(cfg.persona.as_deref(), cfg.language, &cfg.user_name);
     let (parts, mic, loading_since) = load(&cfg, &shared, &persona, rt.handle())?;
     // Kept to cut the voice off at the end; the conversation reaches it through `pal.speech`.
     let voice = parts.speaker.clone();
@@ -372,7 +374,7 @@ impl Conversation {
         loading_since: Instant,
     ) -> Self {
         Self {
-            party: cfg.party.then(|| Party::new(cfg.language)),
+            party: cfg.party.then(|| Party::new(&persona)),
             cfg,
             shared,
             events,
