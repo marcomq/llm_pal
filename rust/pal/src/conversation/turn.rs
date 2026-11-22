@@ -148,8 +148,9 @@ impl Conversation {
             Some(audio) => timing.finish(Some(audio), &|e| self.send(e)),
             None => self.timing = Some(timing),
         }
+        let voice_playing = self.speaking();
         if let Some(party) = &mut self.party {
-            party.replied(&reply);
+            party.replied(&reply, voice_playing);
         }
         if self.persona.remember(t.p.line, reply) {
             self.last_reply = Some(t.spoken);

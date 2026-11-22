@@ -4,6 +4,7 @@
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
+use crate::think::character::tokens;
 use crate::think::persona::Persona;
 
 /// How long the room must be quiet after talk before Pal says something.
@@ -47,10 +48,10 @@ impl Party {
         self.called(text) || self.answering
     }
 
-    /// Pal's reply is complete; its voice may still be playing.
-    pub fn replied(&mut self, reply: &str) {
+    /// Pal's reply is complete. If its voice has already stopped, the time to answer starts now.
+    pub fn replied(&mut self, reply: &str, voice_playing: bool) {
         self.question = reply.trim_end().ends_with('?').then(Instant::now);
-        self.voice_over = false;
+        self.voice_over = !voice_playing;
         self.answering = false;
     }
 
@@ -64,7 +65,7 @@ impl Party {
 
     /// True if `text` calls Pal by one of his names.
     pub fn called(&self, text: &str) -> bool {
-        text.to_lowercase().split(|c: char| !c.is_alphanumeric()).any(|w| self.call_words.iter().any(|n| n == w))
+        tokens(text).iter().any(|w| self.call_words.contains(w))
     }
 
     /// Someone speaks; the silence starts again after it.
@@ -118,7 +119,7 @@ mod tests {
     #[test]
     fn speech_right_after_a_question_answers_it() {
         let mut party = Party::new(&Persona::kitt(Language::German, DEFAULT_NAME));
-        party.replied("Soll ich das erklären?");
+        party.replied("Soll ich das erklären?", true);
         party.speech();
         assert!(!party.addressed("Ja, gerne."), "over his voice");
         party.voice_ended();
@@ -133,9 +134,19 @@ mod tests {
     }
 
     #[test]
+    fn a_voice_that_stopped_before_the_reply_was_complete_opens_the_answer_window() {
+        let mut party = Party::new(&Persona::kitt(Language::German, DEFAULT_NAME));
+        party.voice_ended();
+        party.replied("Soll ich das erklären?", false);
+        party.question = party.question.map(|at| at - ECHO_TAIL);
+        party.speech();
+        assert!(party.addressed("Ja, gerne."));
+    }
+
+    #[test]
     fn a_later_voice_stop_does_not_renew_an_old_question() {
         let mut party = Party::new(&Persona::kitt(Language::German, DEFAULT_NAME));
-        party.replied("Soll ich das erklären?");
+        party.replied("Soll ich das erklären?", true);
         party.voice_ended();
         party.question = party.question.map(|at| at - ANSWER_WINDOW);
         party.voice_ended();
@@ -146,10 +157,10 @@ mod tests {
     #[test]
     fn no_answer_without_a_question_or_after_the_window() {
         let mut party = Party::new(&Persona::kitt(Language::German, DEFAULT_NAME));
-        party.replied("Das ist erledigt.");
+        party.replied("Das ist erledigt.", true);
         party.speech();
         assert!(!party.addressed("Ja, gerne."));
-        party.replied("Soll ich das erklären?");
+        party.replied("Soll ich das erklären?", true);
         party.voice_ended();
         party.question = party.question.map(|at| at - ANSWER_WINDOW);
         party.speech();

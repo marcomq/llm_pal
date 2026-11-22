@@ -160,6 +160,12 @@ static func local_model(cfg: ConfigFile) -> String:
 	return m if m in LOCAL_MODELS else LOCAL_MODELS[0]
 
 
+## Whether a start loads the chosen catalog model, so that it can prove or fail its trial.
+static func runs_local_model(cfg: ConfigFile) -> bool:
+	var local: bool = provider(cfg) == "local" or cfg.get_value("llm", "fallback", false)
+	return local and OS.get_environment("PAL_LLM").is_empty()
+
+
 ## A size in GB with the language's decimal sign.
 static func gigabytes(bytes: int, lang: String) -> String:
 	var text := String.num(bytes / 1e9, 1)
@@ -485,9 +491,7 @@ func _has_room(index: int) -> bool:
 func _choose_local_model(chosen: String) -> void:
 	var before := local_model(_cfg)
 	var from: String = _cfg.get_value("llm", "trying_from", "")
-	if not _uses_local() or not OS.get_environment("PAL_LLM").is_empty():
-		from = ""
-	elif chosen != before and from.is_empty():
+	if chosen != before and from.is_empty():
 		from = before
 	if from == chosen:
 		from = ""
@@ -505,7 +509,7 @@ func _changes_the_cache(chosen: String) -> bool:
 
 func _save() -> void:
 	var chosen: String = LOCAL_MODELS[_local_model.selected]
-	if _uses_local() and not _has_room(_local_model.selected):
+	if _uses_local() and OS.get_environment("PAL_LLM").is_empty() and not _has_room(_local_model.selected):
 		return
 	if _changes_the_cache(chosen):
 		_cfg.set_value("llm", "cache_stale", true)

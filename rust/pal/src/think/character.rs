@@ -1,5 +1,6 @@
 //! Who Pal is: the built-in character or one from a text file (`personas/<de|en>/<name>.txt` in the model folder).
-//! A file has `[section]` headers; only `[system]` is required, and what it leaves out stays empty.
+//! A file has `[section]` headers; only `[system]` is required. Call words default to the file name, joke words and
+//! the silence prompt to the language's; other sections it leaves out stay empty.
 
 use std::path::Path;
 
@@ -83,11 +84,15 @@ impl Character {
             let list = lines(name).iter().flat_map(|l| l.split(','));
             list.map(|w| w.trim().to_lowercase()).filter(|w| !w.is_empty()).collect()
         };
-        let mut call_words = words("call words");
+        let mut call_words = Vec::new();
+        for entry in words("call words") {
+            match tokens(&entry).as_slice() {
+                [word] => call_words.push(word.clone()),
+                _ => return Err(format!("[call words] takes single words: {entry}")),
+            }
+        }
         if call_words.is_empty() {
-            let name = stem.to_lowercase();
-            call_words =
-                name.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).map(String::from).collect();
+            call_words = tokens(stem);
         }
         if call_words.is_empty() {
             return Err("[call words] is missing".into());
@@ -109,6 +114,11 @@ impl Character {
     pub fn template(language: Language) -> String {
         language.profile().character.to_string()
     }
+}
+
+/// The lowercase words of `text`, as names are matched against a transcript.
+pub fn tokens(text: &str) -> Vec<String> {
+    text.to_lowercase().split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).map(String::from).collect()
 }
 
 fn owned(words: &[&str]) -> Vec<String> {
@@ -164,6 +174,9 @@ mod tests {
             ("[system]\nx\n[replies]\n= trigger", "[replies]"),
             ("[system]\nx\n[replies]\n= a | b | ", "[replies]"),
             ("[system]\nx\n[silence]\nno talk", "{talk}"),
+            ("[system]\nx\n[call words]\nhey kitt", "single words"),
+            ("[system]\nx\n[call words]\nk.i.t.t", "single words"),
+            ("[system]\nx\n[call words]\n---", "single words"),
         ] {
             let e = Character::parse(text, "name", Language::German).err().unwrap();
             assert!(e.contains(wrong), "{text}: {e}");

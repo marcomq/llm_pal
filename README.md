@@ -59,7 +59,9 @@ Each language has its own personality, chosen in the settings. The built-in char
 you can always go back to it. **Template** writes it as a text file to edit, **Load file** adds your own. Files live in
 `personas/<de|en>/<name>.txt` in the model folder. A language without a file keeps the built-in character.
 
-Only `[system]` is required. Sections you leave out stay empty:
+Only `[system]` is required. Without `[call words]`, the words of the file name call the character. Without
+`[joke words]` or `[silence]`, the language's defaults apply. Other sections you leave out stay empty. Each call word
+must be a single word of letters or digits:
 
 ```text
 [system]

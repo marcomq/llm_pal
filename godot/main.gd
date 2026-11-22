@@ -36,14 +36,14 @@ const TEXTS := {
 		"persona_failed": "Persönlichkeit nicht lesbar, nutze KITT: %s",
 		"voice_failed": "Stimme nicht lesbar, nutze die Standardstimme: %s",
 		"remove_title": "Unbenutztes Modell löschen?", "remove_text": "%s löschen und %s GB freigeben?",
-		"remove": "Löschen", "keep": "Behalten"},
+		"remove": "Löschen", "keep": "Behalten", "remove_failed": "%s konnte nicht gelöscht werden"},
 	"en": {"loading": "loading models …", "listening": "listening", "thinking": "thinking", "speaking": "speaking",
 		"stopped": "stopped", "error": "Error: ", "no_mic": "no access to the microphone",
 		"model_failed": "the new model didn't run, back to the old one",
 		"persona_failed": "can't read the personality, using KITT: %s",
 		"voice_failed": "can't read the voice, using the default one: %s",
 		"remove_title": "Delete the unused model?", "remove_text": "Delete %s and free %s GB?",
-		"remove": "Delete", "keep": "Keep"},
+		"remove": "Delete", "keep": "Keep", "remove_failed": "couldn't delete %s"},
 }
 
 @onready var pal: PalNode = $Pal
@@ -206,7 +206,7 @@ func _model_dir() -> String:
 ## Undoes a model change that is still on trial; true if there was one.
 func _back_to_last_model() -> bool:
 	var last: String = _cfg.get_value("llm", "trying_from", "")
-	if last.is_empty():
+	if last.is_empty() or not Settings.runs_local_model(_cfg):
 		return false
 	_cfg.set_value("llm", "replaced", Settings.local_model(_cfg))
 	_cfg.set_value("llm", "local_model", last)
@@ -219,7 +219,7 @@ func _back_to_last_model() -> bool:
 ## Pal is ready, so a model on trial works: only now may the one it replaced go, if the user agrees.
 func _model_works() -> void:
 	var old: String = _cfg.get_value("llm", "trying_from", "")
-	if not old.is_empty():
+	if not old.is_empty() and Settings.runs_local_model(_cfg):
 		_cfg.set_value("llm", "replaced", old)
 		_cfg.set_value("llm", "trying_from", "")
 		_cfg.save(SETTINGS_PATH)
@@ -243,8 +243,11 @@ func _offer_removal() -> void:
 	_removal.ok_button_text = t["remove"]
 	_removal.cancel_button_text = t["keep"]
 	_removal.confirmed.connect(func() -> void:
-		pal.remove_llm(_model_dir(), old)
-		_forget_replaced())
+		if pal.remove_llm(_model_dir(), old):
+			_forget_replaced()
+		else:
+			_error = TEXTS[_lang]["remove_failed"] % old.get_basename()
+			_removal.queue_free())
 	_removal.canceled.connect(_forget_replaced)
 	add_child(_removal)
 	_removal.popup_centered(Vector2i(int(size.x * 0.85), 0))

@@ -7,7 +7,7 @@ use std::time::Instant;
 
 use chrono::Local;
 
-use crate::think::character::Character;
+use crate::think::character::{Character, tokens};
 use crate::think::language::Language;
 use crate::think::local_llm::{Message, Role};
 use crate::think::placeholders;
@@ -123,8 +123,8 @@ impl Persona {
         if words.len() > QUIP_MAX_WORDS {
             return None;
         }
-        let name = self.name.to_lowercase();
-        let addressing = |w: &str| w == name || self.call_words.iter().any(|c| c == w);
+        let name = tokens(&self.name);
+        let addressing = |w: &str| name.iter().chain(&self.call_words).any(|n| n == w);
         let said = |trigger: &String| {
             let whole = trigger.strip_prefix('!');
             let wanted: Vec<&str> = whole.unwrap_or(trigger).split(' ').collect();
@@ -134,8 +134,12 @@ impl Persona {
         let i = self.quips.iter().position(|q| q.triggers.iter().any(said))?;
         self.quips_given[i] += 1;
         let answers = &self.quips[i].answers;
-        let answer = self.named(&answers[self.quips_given[i] % answers.len()]);
-        Some(placeholders::fill(&answer, self.language, Local::now().naive_local(), self.started.elapsed()))
+        Some(self.rendered(&answers[self.quips_given[i] % answers.len()]))
+    }
+
+    /// A fixed reply as it is said: with the user's name and the clock filled in.
+    fn rendered(&self, reply: &str) -> String {
+        placeholders::fill(&self.named(reply), self.language, Local::now().naive_local(), self.started.elapsed())
     }
 
     pub fn new(system: impl Into<String>) -> Self {
@@ -168,22 +172,21 @@ impl Persona {
             return None;
         }
         let clauses = self.clauses(transcript);
-        let denies = clauses.iter().any(|(_, no)| *no);
+        let denied: Vec<Vec<String>> =
+            clauses.iter().filter(|(_, no)| *no).map(|(c, _)| self.content_words(c)).collect();
         let affirmed: Vec<String> =
             clauses.iter().filter(|(_, no)| !no).flat_map(|(c, _)| self.content_words(c)).collect();
-        let all = self.content_words(transcript);
         let (_, _, reply) = self
             .pool
             .iter()
             .filter(|(_, a)| self.history.iter().all(|(_, r)| *r != self.named(a)))
             .map(|(u, a)| (negated(u), self.content_words(u), a))
-            .filter(|(no, _, _)| !no || denies)
             .filter(|(no, words, _)| {
-                let said = if *no { &all } else { &affirmed };
-                !words.is_empty() && words.iter().all(|w| said.iter().any(|s| alike(s, w)))
+                let says_all = |said: &[String]| words.iter().all(|w| said.iter().any(|s| alike(s, w)));
+                !words.is_empty() && if *no { denied.iter().any(|c| says_all(c)) } else { says_all(&affirmed) }
             })
             .min_by_key(|(_, words, _)| std::cmp::Reverse(words.len()))?;
-        Some(self.named(reply))
+        Some(self.rendered(reply))
     }
 
     /// The line's sentences, each with whether it denies something. A comma only splits before a suggestion, as in
@@ -492,6 +495,32 @@ mod tests {
         let en = Persona::kitt(Language::English, DEFAULT_NAME);
         assert!(en.pooled("I'm stuck in traffic. Shouldn't we turn around?").is_some());
         assert!(en.pooled("I'm not drinking beer today. It's late.").unwrap().contains("without beer"));
+    }
+
+    #[test]
+    fn a_denied_pool_line_must_be_denied_in_one_clause() {
+        let en = Persona::kitt(Language::English, DEFAULT_NAME);
+        let without_beer = |line: &str| en.pooled(line).is_some_and(|r| r.contains("without beer"));
+        assert!(without_beer("I'm not drinking beer today."));
+        assert!(!without_beer("I'm not tired. I'm drinking beer."));
+    }
+
+    #[test]
+    fn a_pool_reply_says_the_clock() {
+        let mut p = Persona::new("sys");
+        p.pool.push(("Wie spät ist es".into(), "Es ist {time}, Michael.".into()));
+        let reply = p.pooled("Wie spät ist es").unwrap();
+        assert!(!reply.contains('{'), "{reply}");
+    }
+
+    #[test]
+    fn every_part_of_the_users_name_addresses_in_an_exact_trigger() {
+        let text = "[system]\nx\n[call words]\nrosa\n[replies]\n= !guten morgen | Hallo.";
+        let c = Character::parse(text, "rosa", Language::German).unwrap();
+        let mut p = Persona::with(c, Language::German, "Jean-Luc");
+        assert!(p.quip("Guten Morgen, Jean-Luc").is_some());
+        assert!(p.quip("Guten Morgen, Rosa").is_some());
+        assert_eq!(p.quip("Guten Morgen, Peter"), None);
     }
 
     #[test]

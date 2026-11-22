@@ -2,7 +2,8 @@
 # Usage: ./build.sh setup | test | godot | android | release | install | version
 # android: debug APK in build/; install: also installs it. The app downloads missing models itself.
 # release: signed with GODOT_ANDROID_KEYSTORE_RELEASE_PATH / _USER / _PASSWORD. The version comes from
-# rust/Cargo.toml; bump it, then tag the release as v<version>. version/code is major*10000 + minor*100 + patch.
+# rust/Cargo.toml; bump it, then tag the release as v<version>. version/code is major*10000 + minor*100 + patch,
+# so minor and patch must stay below 100.
 set -eu
 cd "$(dirname "$0")"
 GODOT="${GODOT:-godot}"
@@ -28,7 +29,13 @@ version() {
 # Writes the Cargo version into the Android export preset.
 sync_version() {
     v=$(version)
-    code=$(echo "$v" | awk -F. '{ print $1 * 10000 + $2 * 100 + $3 }')
+    code=$(echo "$v" | awk -F. '/^[0-9]+\.[0-9]+\.[0-9]+$/ && $2 < 100 && $3 < 100 {
+        code = $1 * 10000 + $2 * 100 + $3
+        if (code <= 2100000000) { printf "%d\n", code; ok = 1 }
+    } END { exit !ok }') || {
+        echo "version $v needs the form major.minor.patch, minor and patch below 100, code at most 2100000000" >&2
+        exit 1
+    }
     sed "s/^version\/name=.*/version\/name=\"$v\"/; s/^version\/code=.*/version\/code=$code/" \
         godot/export_presets.cfg > godot/export_presets.cfg.tmp
     mv godot/export_presets.cfg.tmp godot/export_presets.cfg
