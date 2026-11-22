@@ -60,6 +60,106 @@ fn download_models() {
     pal::downloader::ensure(&models(), &pal::downloader::all_files(), &Default::default()).unwrap();
 }
 
+/// Against a running Ollama with the model `PAL_OLLAMA_MODEL` (default `pal-test-qwen`, a thinking model):
+/// `echo "FROM $PWD/models/Qwen3.5-4B-Q4_K_M.gguf" > /tmp/M && ollama create pal-test-qwen -f /tmp/M`.
+mod ollama {
+    use std::time::{Duration, Instant};
+
+    use mq_bridge::models::Endpoint;
+    use mq_bridge::{CanonicalMessage, Publisher};
+    use pal::think::local_llm::{Message, Role};
+    use pal::think::remote_llm::{Provider, RemoteConfig};
+    use pal::transport::{CORRELATION_ID, End, StreamCall, Token, failed};
+    use tokio::runtime::Runtime;
+
+    /// Far below what a thinking model takes (minutes), far above a warm reply.
+    const FIRST_WORD: Duration = Duration::from_secs(15);
+
+    struct Chat {
+        runtime: Runtime,
+        config: RemoteConfig,
+        call: StreamCall,
+        cancel: Publisher,
+    }
+
+    struct Reply {
+        text: String,
+        last: Token,
+        first_word: Option<Duration>,
+    }
+
+    impl Chat {
+        fn new(name: &'static str, model: String) -> Self {
+            let runtime = Runtime::new().unwrap();
+            let config = RemoteConfig {
+                provider: Provider::Ollama,
+                url: String::new(),
+                model,
+                api_key: String::new(),
+                effort: "none".into(),
+            };
+            let tokens = Endpoint::new_memory(&format!("test.{name}.tokens"), 4096);
+            let cancel_from = Endpoint::new_memory(&format!("test.{name}.cancel"), 16);
+            let endpoint = config.endpoint(&tokens, &cancel_from).unwrap();
+            let (call, cancel) = runtime.block_on(async {
+                (StreamCall::new(name, endpoint, &tokens).await.unwrap(), Publisher::new(cancel_from).await.unwrap())
+            });
+            Self { runtime, config, call, cancel }
+        }
+
+        fn ask(&mut self, turn: &str, cancel_at_first_word: bool) -> Reply {
+            let messages = [
+                Message::new(Role::System, "Du bist KITT. Antworte kurz auf Deutsch."),
+                Message::new(Role::User, "Wie hoch ist die Zugspitze?"),
+            ];
+            let request = CanonicalMessage::from(self.config.payload(&messages));
+            let started = Instant::now();
+            let (mut text, mut first_word) = (String::new(), None);
+            let (runtime, cancel) = (&self.runtime, &self.cancel);
+            let last = self
+                .call
+                .call(turn, request, |piece| {
+                    text.push_str(&Token::from_message(&piece).text);
+                    if first_word.is_none() {
+                        first_word = Some(started.elapsed());
+                        if cancel_at_first_word {
+                            let stop = CanonicalMessage::from("").with_metadata_kv(CORRELATION_ID, turn);
+                            runtime.block_on(cancel.send(stop)).map_err(failed)?;
+                        }
+                    }
+                    Ok(())
+                })
+                .unwrap();
+            Reply { text, last, first_word }
+        }
+    }
+
+    #[test]
+    #[ignore = "needs a running Ollama and its test model"]
+    fn replies_stream_without_thinking_stop_on_cancel_and_report_a_missing_model() {
+        let model = std::env::var("PAL_OLLAMA_MODEL").unwrap_or_else(|_| "pal-test-qwen".into());
+        let mut chat = Chat::new("ollama", model);
+
+        let loaded = chat.ask("load", false);
+        assert!(loaded.last.end == Some(End::Complete), "{}", loaded.last.text);
+
+        let reply = chat.ask("reply", false);
+        assert!(reply.last.end == Some(End::Complete), "{}", reply.last.text);
+        assert!(reply.text.contains("Zugspitze") || reply.text.contains("Meter"), "{}", reply.text);
+        assert!(!reply.text.contains("<think>"), "{}", reply.text);
+        let first_word = reply.first_word.expect("a word");
+        assert!(first_word < FIRST_WORD, "first word after {first_word:?}");
+        println!("first word after {first_word:?}: {}", reply.text);
+
+        let stopped = chat.ask("stopped", true);
+        assert!(stopped.last.end == Some(End::Cancelled), "{}", stopped.last.text);
+
+        let missing = Chat::new("ollama_missing", "pal-no-such-model".into()).ask("missing", false);
+        assert!(missing.last.end == Some(End::Failed), "{}", missing.last.text);
+        assert_eq!(missing.last.index, 0, "the local fallback needs an error before any text");
+    }
+}
+
 mod speech {
     use super::*;
 

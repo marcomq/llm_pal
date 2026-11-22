@@ -49,6 +49,8 @@ pub struct RemoteConfig {
     pub model: String,
     /// Empty for none, as for Ollama.
     pub api_key: String,
+    /// How long the model may think, in the provider's own words ("none", "low", ...); empty sends nothing.
+    pub effort: String,
 }
 
 impl RemoteConfig {
@@ -70,7 +72,7 @@ impl RemoteConfig {
                     "path": "/messages",
                     "format": "json_array",
                     "per_message": true,
-                    "request": anthropic_request(&self.model),
+                    "request": anthropic_request(&self.model, &self.effort),
                     "value": "/delta/text",
                     "stop_reason": "/delta/stop_reason",
                     "error": "/error/message",
@@ -84,14 +86,26 @@ impl RemoteConfig {
                 "api_key": (!self.api_key.is_empty()).then_some(&self.api_key),
                 "model": self.model,
                 "messages_from_payload": true,
-                // Same sampling as the local model; OpenAI's reasoning models reject a temperature.
-                "options": (provider == Provider::Ollama).then(|| json!({"temperature": 0.5})),
+                "options": self.chat_options(provider),
                 "request_timeout_ms": SILENCE_MS,
                 "stream_to": stream_to,
                 "cancel_from": cancel_from,
             }}),
         };
         serde_json::from_value(endpoint).map_err(|e| Error::Llm(format!("server endpoint: {e}")))
+    }
+
+    /// Further fields of an `openai_chat` request. A thinking model may stay silent for minutes without an effort.
+    fn chat_options(&self, provider: Provider) -> Option<serde_json::Map<String, serde_json::Value>> {
+        let mut options = serde_json::Map::new();
+        // Same sampling as the local model; OpenAI's reasoning models reject a temperature.
+        if provider == Provider::Ollama {
+            options.insert("temperature".into(), json!(0.5));
+        }
+        if !self.effort.is_empty() {
+            options.insert("reasoning_effort".into(), json!(self.effort));
+        }
+        (!options.is_empty()).then_some(options)
     }
 
     /// The request's payload: the messages, for Anthropic with the system prompt apart.
@@ -108,16 +122,18 @@ impl RemoteConfig {
     }
 }
 
-/// The Messages request around a payload. Thinking would delay the first word; low effort keeps it short.
-fn anthropic_request(model: &str) -> String {
-    let body = json!({
+/// The Messages request around a payload. Thinking would delay the first word; a low effort keeps it short.
+fn anthropic_request(model: &str, effort: &str) -> String {
+    let mut body = json!({
         "model": model,
         "max_tokens": ANTHROPIC_MAX_TOKENS,
         "system": "SYSTEM",
         "messages": "MESSAGES",
-        "output_config": {"effort": "low"},
         "stream": true,
     });
+    if !effort.is_empty() {
+        body["output_config"] = json!({"effort": effort});
+    }
     // Serializing escapes the literal text; the template escapes what the payload puts in.
     body.to_string().replacen(r#""system":"SYSTEM""#, r#""system":"${payload:system}""#, 1).replacen(
         r#""messages":"MESSAGES""#,
@@ -179,7 +195,7 @@ mod tests {
     }
 
     fn remote(provider: Provider, url: String) -> RemoteConfig {
-        RemoteConfig { provider, url, model: "m".into(), api_key: "secret".into() }
+        RemoteConfig { provider, url, model: "m".into(), api_key: "secret".into(), effort: "low".into() }
     }
 
     fn meta<'a>(msg: &'a CanonicalMessage, key: &str) -> &'a str {
@@ -233,6 +249,24 @@ mod tests {
         assert!(request.starts_with("POST /v1/chat/completions"), "{request}");
         assert!(request.to_lowercase().contains("authorization: bearer secret"), "{request}");
         assert_eq!(body(&request)["messages"][0], json!({"role": "system", "content": "Be KITT."}));
+        assert_eq!(body(&request)["reasoning_effort"], "low");
+    }
+
+    #[test]
+    fn an_empty_effort_is_not_sent() {
+        let done =
+            "data: {\"choices\":[{\"delta\":{\"content\":\"Hi\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n";
+        let (url, server) = serve_once(sse(done));
+        let config = RemoteConfig { effort: String::new(), ..remote(Provider::OpenAi, url) };
+        let (answer, _) = ask(&config, &[Message::new(Role::User, "Hi")], "test.no_effort", None);
+        answer.unwrap();
+        assert!(body(&server.join().unwrap()).get("reasoning_effort").is_none());
+
+        let request: Value = serde_json::from_str(
+            &anthropic_request("m", "").replace("${payload:system}", "s").replace("${payload:messages | raw}", "[]"),
+        )
+        .unwrap();
+        assert!(request.get("output_config").is_none());
     }
 
     #[test]
@@ -254,6 +288,7 @@ mod tests {
         assert_eq!(body["system"], "Be \"KITT\".");
         assert_eq!(body["messages"], json!([{"role": "user", "content": "Hi"}]));
         assert_eq!((&body["model"], &body["stream"]), (&json!("m"), &json!(true)));
+        assert_eq!(body["output_config"]["effort"], "low");
     }
 
     #[test]

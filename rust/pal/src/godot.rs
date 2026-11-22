@@ -84,6 +84,9 @@ pub struct PalNode {
     llm_remote_model: GString,
     #[export]
     llm_api_key: GString,
+    /// How long the server's model may think, in the provider's words; empty sends nothing.
+    #[export]
+    llm_effort: GString,
     /// The local model answers when the server fails; it is loaded only then.
     #[export]
     llm_fallback: bool,
@@ -117,6 +120,7 @@ impl INode for PalNode {
             llm_url: GString::new(),
             llm_remote_model: GString::new(),
             llm_api_key: GString::new(),
+            llm_effort: GString::new(),
             llm_fallback: false,
             party_mode: false,
             base,
@@ -207,6 +211,7 @@ impl PalNode {
                 url: self.llm_url.to_string(),
                 model: self.llm_remote_model.to_string(),
                 api_key: self.llm_api_key.to_string(),
+                effort: self.llm_effort.to_string(),
             }),
             None if provider == "local" => None,
             None => {

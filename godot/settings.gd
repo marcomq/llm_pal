@@ -18,7 +18,8 @@ const DEFAULT_URLS := {
 	"ollama": "http://localhost:11434/v1", "openai": "https://api.openai.com/v1",
 	"anthropic": "https://api.anthropic.com/v1",
 }
-const DEFAULT_MODELS := {"ollama": "llama3.2", "openai": "gpt-5-mini", "anthropic": "claude-opus-5-5"}
+const DEFAULT_MODELS := {"ollama": "llama3.2", "openai": "gpt-6-luna", "anthropic": "claude-haiku-5-5"}
+const DEFAULT_EFFORTS := {"ollama": "none", "openai": "none", "anthropic": "low"}
 const VOICE_SOURCES := ["local", "fish"]
 const DEFAULT_FISH_MODEL := "s2.1-pro-free"
 ## Same files as in `downloader.rs`. The first is the default; the others are fetched only once chosen.
@@ -49,7 +50,8 @@ const TEXTS := {
 		"consent_title": "Eigene Stimme laden",
 		"consent_text": "Lade nur deine eigene Stimme oder die einer Person, die ausdrücklich zugestimmt hat.",
 		"consent_yes": "Ich bestätige das",
-		"model": "Modell", "key": "API-Schlüssel", "fallback": "Bei Serverfehler lokales llama nutzen",
+		"model": "Modell", "effort": "Reasoning", "key": "API-Schlüssel",
+		"fallback": "Bei Serverfehler lokales llama nutzen",
 		"save": "Speichern", "cancel": "Abbrechen"},
 	"en": {"title": "Settings", "name": "Your name", "voice_de": "German voice", "voice_en": "English voice",
 		"voice": "Voice", "voice_local": "Local", "voice_fish": "Fish Audio (online)",
@@ -65,7 +67,8 @@ const TEXTS := {
 		"consent_title": "Load a voice of your own",
 		"consent_text": "Only load your own voice, or that of a person who has explicitly agreed.",
 		"consent_yes": "I confirm",
-		"model": "Model", "key": "API key", "fallback": "Use local llama when the server fails",
+		"model": "Model", "effort": "Reasoning", "key": "API key",
+		"fallback": "Use local llama when the server fails",
 		"save": "Save", "cancel": "Cancel"},
 }
 
@@ -91,6 +94,7 @@ var _fish_model := LineEdit.new()
 var _provider := OptionButton.new()
 var _url := LineEdit.new()
 var _model := LineEdit.new()
+var _effort := LineEdit.new()
 var _key := LineEdit.new()
 var _fallback := CheckBox.new()
 var _remote: Array[Control] = []
@@ -142,6 +146,15 @@ static func url(cfg: ConfigFile) -> String:
 static func model(cfg: ConfigFile) -> String:
 	var m: String = cfg.get_value("llm", "model", "")
 	return m if not m.is_empty() else DEFAULT_MODELS.get(provider(cfg), "")
+
+
+## An own OpenAI model gets no default: which efforts it accepts differs from model to model.
+static func effort(cfg: ConfigFile) -> String:
+	var e: String = cfg.get_value("llm", "effort", "")
+	if not e.is_empty():
+		return e
+	var own_model: bool = not (cfg.get_value("llm", "model", "") as String).is_empty()
+	return "" if own_model and provider(cfg) == "openai" else DEFAULT_EFFORTS.get(provider(cfg), "")
 
 
 static func fish_model(cfg: ConfigFile) -> String:
@@ -254,6 +267,7 @@ func _init(cfg: ConfigFile, path: String, lang: String, model_dir: String) -> vo
 	_provider.item_selected.connect(func(_i: int) -> void:
 		_url.text = ""
 		_model.text = ""
+		_effort.text = ""
 		_key.text = ""
 		_show_provider())
 	_field(form, "llm", _provider)
@@ -263,6 +277,7 @@ func _init(cfg: ConfigFile, path: String, lang: String, model_dir: String) -> vo
 	_local_model_field = _field(form, "local_model", _local_model)
 	_remote.append(_field(form, "url", _url))
 	_remote.append(_field(form, "model", _model))
+	_remote.append(_field(form, "effort", _effort))
 	_key.secret = true
 	_remote.append(_field(form, "key", _key))
 	_fallback.text = _texts["fallback"]
@@ -446,6 +461,7 @@ func open() -> void:
 	_provider.select(maxi(PROVIDERS.find(provider(_cfg)), 0))
 	_url.text = url(_cfg)
 	_model.text = _cfg.get_value("llm", "model", "")
+	_effort.text = _cfg.get_value("llm", "effort", "")
 	_key.text = _cfg.get_value("llm", "api_key", "")
 	_fallback.button_pressed = _cfg.get_value("llm", "fallback", false)
 	_local_model.select(LOCAL_MODELS.find(local_model(_cfg)))
@@ -468,6 +484,7 @@ func _show_provider() -> void:
 	_local_model_field.visible = _uses_local() and OS.get_environment("PAL_LLM").is_empty()
 	_url.placeholder_text = DEFAULT_URLS.get(p, "")
 	_model.placeholder_text = DEFAULT_MODELS.get(p, "")
+	_effort.placeholder_text = DEFAULT_EFFORTS.get(p, "")
 
 
 func _uses_local() -> bool:
@@ -525,6 +542,7 @@ func _save() -> void:
 	_cfg.set_value("llm", "provider", PROVIDERS[_provider.selected])
 	_cfg.set_value("llm", "url", _url.text.strip_edges())
 	_cfg.set_value("llm", "model", _model.text.strip_edges())
+	_cfg.set_value("llm", "effort", _effort.text.strip_edges())
 	_cfg.set_value("llm", "api_key", _key.text.strip_edges())
 	_cfg.set_value("llm", "fallback", _fallback.button_pressed)
 	_cfg.save(_path)

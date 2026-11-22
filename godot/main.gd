@@ -158,6 +158,7 @@ func _start() -> void:
 	pal.llm_provider = Settings.provider(_cfg)
 	pal.llm_url = Settings.url(_cfg)
 	pal.llm_remote_model = Settings.model(_cfg)
+	pal.llm_effort = Settings.effort(_cfg)
 	pal.llm_api_key = _cfg.get_value("llm", "api_key", "")
 	pal.llm_fallback = _cfg.get_value("llm", "fallback", false)
 	pal.start(_model_dir())

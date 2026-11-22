@@ -142,7 +142,7 @@ explicit consent; never add recordings or cloned voices to the repository or the
 ## Godot
 
 - `PalNode` (`godot.rs`): vars `user_name`, `llm_provider` (`local`/`ollama`/`openai`/`anthropic`),
-  `llm_url`, `llm_remote_model`, `llm_api_key`, `llm_fallback`, `fish_api_key`, `fish_voice_id`, `fish_model`,
+  `llm_url`, `llm_remote_model`, `llm_effort`, `llm_api_key`, `llm_fallback`, `fish_api_key`, `fish_voice_id`, `fish_model`,
   `smart_turn`, `barge_in`, `party_mode`. Signals:
   `ready_to_listen`, `heard`, `said`, `turn_done`, `interrupted`, `ignored`, `failed`, `reply_failed`.
 - `main.gd`: subtitles (`You` above the voice box, `Reply` below, without prosody tags), brighter red while said. While nothing moves it draws
@@ -151,7 +151,8 @@ explicit consent; never add recordings or cloned voices to the repository or the
   label or key P switches party mode (`user/party`).
 - `settings.gd` (`Settings`): saves to `user://settings.cfg` (sections `user` incl. `party`, `voice`, `persona`, `fish`, `llm`); saving restarts Pal. An empty
   URL means the provider default (in `settings.gd` and `remote_llm.rs`). An empty model is replaced by the provider's
-  model default from `settings.gd` only; `remote_llm.rs` has no model default and sends the model as given.
+  model default from `settings.gd` only; `remote_llm.rs` has no model default and sends the model as given. The same
+  goes for the effort (`llm/effort`), except that an own OpenAI model gets none, as its accepted values vary.
 - Local models: `Settings.LOCAL_MODELS`, same files as `downloader.rs`, whose `ON_REQUEST` models are fetched only once
   chosen (`llm/local_model`). A new one is on trial (`llm/trying_from`): `main.gd` goes back if it fails or the app
   died before `ready_to_listen`. `llm/replaced` (the old model, or the new one if it failed) makes it ask before
