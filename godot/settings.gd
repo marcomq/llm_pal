@@ -19,13 +19,18 @@ const DEFAULT_URLS := {
 	"anthropic": "https://api.anthropic.com/v1",
 }
 const DEFAULT_MODELS := {"ollama": "llama3.2", "openai": "gpt-5-mini", "anthropic": "claude-opus-5-5"}
+const VOICE_SOURCES := ["local", "fish"]
+const DEFAULT_FISH_MODEL := "s2.1-pro-free"
 const TEXTS := {
 	"de": {"title": "Einstellungen", "name": "Dein Name", "voice_de": "Stimme Deutsch",
-		"voice_en": "Stimme Englisch", "llm": "Sprachmodell", "url": "Server-Adresse",
+		"voice_en": "Stimme Englisch", "voice": "Stimme", "voice_local": "Lokal",
+		"voice_fish": "Fish Audio (online)", "fish_voice": "Stimmen-ID",
+		"llm": "Sprachmodell", "url": "Server-Adresse",
 		"model": "Modell", "key": "API-Schlüssel", "fallback": "Bei Serverfehler lokales llama nutzen",
 		"save": "Speichern", "cancel": "Abbrechen"},
 	"en": {"title": "Settings", "name": "Your name", "voice_de": "German voice", "voice_en": "English voice",
-		"llm": "Language model", "url": "Server address",
+		"voice": "Voice", "voice_local": "Local", "voice_fish": "Fish Audio (online)",
+		"fish_voice": "Voice ID", "llm": "Language model", "url": "Server address",
 		"model": "Model", "key": "API key", "fallback": "Use local llama when the server fails",
 		"save": "Save", "cancel": "Cancel"},
 }
@@ -36,6 +41,12 @@ var _texts: Dictionary
 var _name := LineEdit.new()
 var _voices := {"de": OptionButton.new(), "en": OptionButton.new()}
 var _voice_lists := {}
+var _voice_source := OptionButton.new()
+var _local_fields: Array[Control] = []
+var _fish_fields: Array[Control] = []
+var _fish_key := LineEdit.new()
+var _fish_voice := LineEdit.new()
+var _fish_model := LineEdit.new()
 var _provider := OptionButton.new()
 var _url := LineEdit.new()
 var _model := LineEdit.new()
@@ -62,10 +73,20 @@ static func voices(model_dir: String, lang: String) -> Array:
 	return VOICES + found.map(func(f: String) -> String: return f.get_basename())
 
 
+## The first voice of one's own in `list`, or else the first catalog voice.
+static func default_voice(list: Array) -> String:
+	return list[VOICES.size()] if list.size() > VOICES.size() else VOICES[0]
+
+
 ## The saved voice for `lang`, or the default if none or an unknown one is saved.
 static func voice(cfg: ConfigFile, lang: String, model_dir: String) -> String:
-	var v: String = cfg.get_value("voice", lang, VOICES[0])
-	return v if v in voices(model_dir, lang) else VOICES[0]
+	var list := voices(model_dir, lang)
+	var v: String = cfg.get_value("voice", lang, "")
+	return v if v in list else default_voice(list)
+
+
+static func voice_source(cfg: ConfigFile) -> String:
+	return cfg.get_value("voice", "source", "local")
 
 
 static func url(cfg: ConfigFile) -> String:
@@ -75,6 +96,11 @@ static func url(cfg: ConfigFile) -> String:
 static func model(cfg: ConfigFile) -> String:
 	var m: String = cfg.get_value("llm", "model", "")
 	return m if not m.is_empty() else DEFAULT_MODELS.get(provider(cfg), "")
+
+
+static func fish_model(cfg: ConfigFile) -> String:
+	var m: String = cfg.get_value("fish", "model", "")
+	return m if not m.is_empty() else DEFAULT_FISH_MODEL
 
 
 func _init(cfg: ConfigFile, path: String, lang: String, model_dir: String) -> void:
@@ -104,11 +130,20 @@ func _init(cfg: ConfigFile, path: String, lang: String, model_dir: String) -> vo
 	form.add_child(title)
 	_field(form, "name", _name)
 	_name.placeholder_text = DEFAULT_NAME
+	for i in VOICE_SOURCES.size():
+		_voice_source.add_item(_texts["voice_" + VOICE_SOURCES[i]], i)
+	_voice_source.item_selected.connect(func(_i: int) -> void: _show_voice_source())
+	_field(form, "voice", _voice_source)
 	for voice_lang in LANGUAGES:
 		var list: Array = _voice_lists[voice_lang]
 		for i in list.size():
 			_voices[voice_lang].add_item(VOICE_NAMES[i] if i < VOICE_NAMES.size() else list[i].capitalize(), i)
-		_field(form, "voice_" + voice_lang, _voices[voice_lang])
+		_local_fields.append(_field(form, "voice_" + voice_lang, _voices[voice_lang]))
+	_fish_key.secret = true
+	_fish_fields.append(_field(form, "key", _fish_key))
+	_fish_fields.append(_field(form, "fish_voice", _fish_voice))
+	_fish_model.placeholder_text = DEFAULT_FISH_MODEL
+	_fish_fields.append(_field(form, "model", _fish_model))
 	for i in PROVIDERS.size():
 		_provider.add_item(PROVIDER_NAMES[i], i)
 	_provider.item_selected.connect(func(_i: int) -> void:
@@ -154,8 +189,14 @@ func _field(form: VBoxContainer, key: String, input: Control) -> Control:
 func open() -> void:
 	_name.text = _cfg.get_value("user", "name", "")
 	for lang in LANGUAGES:
-		var v: String = _cfg.get_value("voice", lang, VOICES[0])
-		_voices[lang].select(maxi(_voice_lists[lang].find(v), 0))
+		var list: Array = _voice_lists[lang]
+		var v: String = _cfg.get_value("voice", lang, "")
+		_voices[lang].select(list.find(v if v in list else default_voice(list)))
+	_voice_source.select(maxi(VOICE_SOURCES.find(voice_source(_cfg)), 0))
+	_show_voice_source()
+	_fish_key.text = _cfg.get_value("fish", "api_key", "")
+	_fish_voice.text = _cfg.get_value("fish", "voice_id", "")
+	_fish_model.text = _cfg.get_value("fish", "model", "")
 	_provider.select(maxi(PROVIDERS.find(provider(_cfg)), 0))
 	_url.text = url(_cfg)
 	_model.text = _cfg.get_value("llm", "model", "")
@@ -163,6 +204,14 @@ func open() -> void:
 	_fallback.button_pressed = _cfg.get_value("llm", "fallback", false)
 	_show_provider()
 	visible = true
+
+
+func _show_voice_source() -> void:
+	var fish: bool = VOICE_SOURCES[_voice_source.selected] == "fish"
+	for c in _local_fields:
+		c.visible = not fish
+	for c in _fish_fields:
+		c.visible = fish
 
 
 func _show_provider() -> void:
@@ -177,6 +226,10 @@ func _save() -> void:
 	_cfg.set_value("user", "name", _name.text.strip_edges())
 	for lang in LANGUAGES:
 		_cfg.set_value("voice", lang, _voice_lists[lang][_voices[lang].selected])
+	_cfg.set_value("voice", "source", VOICE_SOURCES[_voice_source.selected])
+	_cfg.set_value("fish", "api_key", _fish_key.text.strip_edges())
+	_cfg.set_value("fish", "voice_id", _fish_voice.text.strip_edges())
+	_cfg.set_value("fish", "model", _fish_model.text.strip_edges())
 	_cfg.set_value("llm", "provider", PROVIDERS[_provider.selected])
 	_cfg.set_value("llm", "url", _url.text.strip_edges())
 	_cfg.set_value("llm", "model", _model.text.strip_edges())

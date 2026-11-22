@@ -10,17 +10,54 @@ use crate::think::language::Language;
 const SILENCE: Duration = Duration::from_secs(5);
 /// Lines of the room's talk a remark can be about.
 const KEPT_LINES: usize = 6;
+/// How long after Pal's question speech may begin and count as the answer, without his name.
+const ANSWER_WINDOW: Duration = Duration::from_secs(8);
+/// Speech that begins this soon after his voice stopped may still be its echo.
+const ECHO_TAIL: Duration = Duration::from_millis(150);
 
 pub struct Party {
     language: Language,
     /// Transcripts not meant for Pal since he last spoke.
     talk: VecDeque<String>,
     last_speech: Instant,
+    /// When Pal's last reply, a question, ended.
+    question: Option<Instant>,
+    /// The voice of that reply has stopped; a later stop belongs to another reply.
+    voice_over: bool,
+    /// The current speech began in time to answer that question.
+    answering: bool,
 }
 
 impl Party {
     pub fn new(language: Language) -> Self {
-        Self { language, talk: VecDeque::new(), last_speech: Instant::now() }
+        Self {
+            language,
+            talk: VecDeque::new(),
+            last_speech: Instant::now(),
+            question: None,
+            voice_over: false,
+            answering: false,
+        }
+    }
+
+    /// True if `text` is meant for Pal: it names him, or answers his question.
+    pub fn addressed(&self, text: &str) -> bool {
+        self.called(text) || self.answering
+    }
+
+    /// Pal's reply is complete; its voice may still be playing.
+    pub fn replied(&mut self, reply: &str) {
+        self.question = reply.trim_end().ends_with('?').then(Instant::now);
+        self.voice_over = false;
+        self.answering = false;
+    }
+
+    /// Pal's voice has stopped: the time to answer his question starts now, once per question.
+    pub fn voice_ended(&mut self) {
+        if let Some(at) = self.question.as_mut().filter(|_| !self.voice_over) {
+            *at = Instant::now();
+            self.voice_over = true;
+        }
     }
 
     /// True if `text` calls Pal by one of his names.
@@ -32,9 +69,13 @@ impl Party {
     /// Someone speaks; the silence starts again after it.
     pub fn speech(&mut self) {
         self.last_speech = Instant::now();
+        self.answering =
+            self.voice_over && self.question.is_some_and(|at| (ECHO_TAIL..ANSWER_WINDOW).contains(&at.elapsed()));
     }
 
     pub fn overhear(&mut self, text: String) {
+        self.question = None;
+        self.answering = false;
         self.talk.push_back(text);
         while self.talk.len() > KEPT_LINES {
             self.talk.pop_front();
@@ -69,6 +110,48 @@ mod tests {
         assert!(party.called("Kitt, wie spät ist es?"));
         assert!(party.called("Hey Kit."));
         assert!(!party.called("Wir brauchen noch Kittharz."));
+    }
+
+    #[test]
+    fn speech_right_after_a_question_answers_it() {
+        let mut party = Party::new(Language::German);
+        party.replied("Soll ich das erklären?");
+        party.speech();
+        assert!(!party.addressed("Ja, gerne."), "over his voice");
+        party.voice_ended();
+        party.speech();
+        assert!(!party.addressed("Ja, gerne."), "may be the echo");
+        party.question = party.question.map(|at| at - ECHO_TAIL);
+        party.speech();
+        assert!(party.addressed("Ja, gerne."));
+        party.overhear("Das Essen ist gut.".into());
+        party.speech();
+        assert!(!party.addressed("Ja, gerne."));
+    }
+
+    #[test]
+    fn a_later_voice_stop_does_not_renew_an_old_question() {
+        let mut party = Party::new(Language::German);
+        party.replied("Soll ich das erklären?");
+        party.voice_ended();
+        party.question = party.question.map(|at| at - ANSWER_WINDOW);
+        party.voice_ended();
+        party.speech();
+        assert!(!party.addressed("Ja, gerne."));
+    }
+
+    #[test]
+    fn no_answer_without_a_question_or_after_the_window() {
+        let mut party = Party::new(Language::German);
+        party.replied("Das ist erledigt.");
+        party.speech();
+        assert!(!party.addressed("Ja, gerne."));
+        party.replied("Soll ich das erklären?");
+        party.voice_ended();
+        party.question = party.question.map(|at| at - ANSWER_WINDOW);
+        party.speech();
+        assert!(!party.addressed("Ja, gerne."));
+        assert!(party.addressed("Kitt, ja."));
     }
 
     #[test]

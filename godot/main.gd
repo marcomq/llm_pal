@@ -1,7 +1,7 @@
 extends Control
-## Pal's display: KITT's voice box or HAL's eye, reacting only to Pal's own voice. Space or a tap on the KITT/HAL
-## label top left switches; L or a tap on the DE/EN label top right switches the language and restarts Pal.
-## P or a tap on P0/P1 next to it switches party mode (Pal answers only "KITT", jokes and silence) and restarts Pal.
+## Pal's display: KITT's voice box, reacting only to Pal's own voice. L or a tap on the DE/EN label top right
+## switches the language and restarts Pal.
+## P or a tap on P0/P1 top left switches party mode (Pal answers only "KITT", jokes and silence) and restarts Pal.
 ## A tap on … (or S) opens the settings; saving them restarts Pal.
 
 const SETTINGS_PATH := "user://settings.cfg"
@@ -26,16 +26,13 @@ const TEXTS := {
 
 @onready var pal: PalNode = $Pal
 @onready var kitt: ColorRect = $Kitt
-@onready var hal: TextureRect = $Hal
 @onready var status: Label = $Status
 @onready var language: Label = $Language
-@onready var display: Label = $Display
 @onready var menu: Label = $Menu
 @onready var party: Label = $Party
 
 var _cfg := ConfigFile.new()
 var _settings: Settings
-var _hal := false
 var _party := false
 var _lang := "de"
 var _level := 0.0
@@ -50,12 +47,10 @@ func _ready() -> void:
 	_center.resize(CENTER_ROWS)
 	_side.resize(SIDE_ROWS)
 	_cfg.load(SETTINGS_PATH)
-	_hal = _cfg.get_value("display", "hal", false)
 	_lang = _cfg.get_value("display", "language", "de")
 	language.text = _lang.to_upper()
 	_party = _cfg.get_value("user", "party", false)
 	_show_party()
-	_apply_mode()
 	pal.failed.connect(func(msg: String) -> void: _error = msg)
 	pal.reply_failed.connect(func(msg: String) -> void: _error = msg)
 	pal.ready_to_listen.connect(func(device: String) -> void: print("listening: ", device))
@@ -106,6 +101,10 @@ func _start() -> void:
 	pal.user_name = Settings.user_name(_cfg)
 	pal.party_mode = _party
 	pal.pocket_voice = Settings.voice(_cfg, _lang, _model_dir())
+	var fish: bool = Settings.voice_source(_cfg) == "fish"
+	pal.fish_api_key = _cfg.get_value("fish", "api_key", "") if fish else ""
+	pal.fish_voice_id = _cfg.get_value("fish", "voice_id", "") if fish else ""
+	pal.fish_model = Settings.fish_model(_cfg)
 	pal.llm_provider = Settings.provider(_cfg)
 	pal.llm_url = Settings.url(_cfg)
 	pal.llm_remote_model = Settings.model(_cfg)
@@ -134,21 +133,16 @@ func _process(delta: float) -> void:
 	var thinking := state == PalNode.THINKING or state == PalNode.LOADING
 	_phase += delta * 6.0
 	_think = lerpf(_think, 1.0 if thinking else 0.0, 1.0 - exp(-6.0 * delta))
-	var pulse := 0.4 + 0.25 * _think * (0.5 + 0.5 * sin(_phase * 0.7))
 
-	var mat := (hal if _hal else kitt).material as ShaderMaterial
+	var mat := kitt.material as ShaderMaterial
 	mat.set_shader_parameter("aspect", size.x / maxf(size.y, 1.0))
-	if _hal:
-		mat.set_shader_parameter("level", _level)
-		mat.set_shader_parameter("glow", pulse)
-	else:
-		# Thinking and loading light only the middle segment, softly pulsing.
-		var bar := _think * (0.7 + 0.3 * sin(_phase * 0.8))
-		_center = _bulbs(_center, maxf(_level * CENTER_ROWS, bar), delta)
-		_side = _bulbs(_side, _level * 0.8 * SIDE_ROWS, delta)
-		mat.set_shader_parameter("center", _center)
-		mat.set_shader_parameter("side", _side)
-		mat.set_shader_parameter("time_s", Time.get_ticks_msec() / 1000.0)
+	# Thinking and loading light only the middle segment, softly pulsing.
+	var bar := _think * (0.7 + 0.3 * sin(_phase * 0.8))
+	_center = _bulbs(_center, maxf(_level * CENTER_ROWS, bar), delta)
+	_side = _bulbs(_side, _level * 0.8 * SIDE_ROWS, delta)
+	mat.set_shader_parameter("center", _center)
+	mat.set_shader_parameter("side", _side)
+	mat.set_shader_parameter("time_s", Time.get_ticks_msec() / 1000.0)
 	status.text = TEXTS[_lang]["error"] + _error if _error else _state_text(state)
 
 
@@ -193,11 +187,6 @@ func _input(event: InputEvent) -> void:
 		_cfg.set_value("user", "party", _party)
 		_cfg.save(SETTINGS_PATH)
 		_restart()
-	elif (pressed_key and key.keycode == KEY_SPACE) or (tapped and display.get_global_rect().has_point(click.position)):
-		_hal = not _hal
-		_apply_mode()
-		_cfg.set_value("display", "hal", _hal)
-		_cfg.save(SETTINGS_PATH)
 
 
 func _switch_language() -> void:
@@ -226,9 +215,3 @@ func _restart() -> void:
 
 func _show_party() -> void:
 	party.text = "P1" if _party else "P0"
-
-
-func _apply_mode() -> void:
-	kitt.visible = not _hal
-	hal.visible = _hal
-	display.text = "HAL" if _hal else "KITT"

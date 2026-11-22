@@ -114,7 +114,7 @@ impl Conversation {
         let line = Persona::user_line(&text, &tags);
         let joke = self.persona.joke(&text);
         if let Some(party) = &mut self.party {
-            if joke.is_none() && !party.called(&text) {
+            if joke.is_none() && !party.addressed(&text) {
                 if early {
                     self.tags = tags_before;
                 } else {

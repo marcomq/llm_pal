@@ -4,7 +4,7 @@ config_version=5
 [application]
 
 config/name="llm_pal"
-config/description="Pal: a sarcastic local voice companion with a KITT or HAL display"
+config/description="Pal: a sarcastic local voice companion"
 run/main_scene="res://main.tscn"
 run/max_fps=30
 config/features=PackedStringArray("4.7", "GL Compatibility")

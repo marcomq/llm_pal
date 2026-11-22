@@ -2,9 +2,13 @@
 
 use std::collections::VecDeque;
 use std::hash::{BuildHasher, RandomState};
+use std::time::Instant;
+
+use chrono::Local;
 
 use crate::think::language::Language;
 use crate::think::local_llm::{Message, Role};
+use crate::think::placeholders;
 
 /// Longer lines are about more than a quip's trigger and go to the model.
 const QUIP_MAX_WORDS: usize = 10;
@@ -42,6 +46,8 @@ pub struct Persona {
     filler: &'static [&'static str],
     history: VecDeque<(String, String)>,
     max_turns: usize,
+    language: Language,
+    started: Instant,
 }
 
 impl Persona {
@@ -58,6 +64,7 @@ impl Persona {
             pool,
             filler: p.filler,
             name: name.to_string(),
+            language,
             ..Self::new(p.system_prompt.replace(DEFAULT_NAME, name))
         }
     }
@@ -86,7 +93,8 @@ impl Persona {
         let i = self.quips.iter().position(|q| q.triggers.iter().any(said))?;
         self.quips_given[i] += 1;
         let answers = &self.quips[i].answers;
-        Some(self.named(answers[self.quips_given[i] % answers.len()]))
+        let answer = self.named(answers[self.quips_given[i] % answers.len()]);
+        Some(placeholders::fill(&answer, self.language, Local::now().naive_local(), self.started.elapsed()))
     }
 
     pub fn new(system: impl Into<String>) -> Self {
@@ -104,6 +112,8 @@ impl Persona {
             filler: &[],
             history: VecDeque::new(),
             max_turns: 3,
+            language: Language::German,
+            started: Instant::now(),
         }
     }
 
@@ -313,6 +323,47 @@ mod tests {
                 assert!(q.answers.iter().all(|a| !a.is_empty()) && !q.answers.is_empty(), "{:?}", q.triggers);
                 assert!(q.triggers.iter().all(|t| !t.is_empty() && *t == t.to_lowercase()), "{:?}", q.triggers);
             }
+        }
+    }
+
+    #[test]
+    fn quips_only_use_known_placeholders_and_say_them() {
+        for language in Language::ALL {
+            let p = Persona::kitt(language, DEFAULT_NAME);
+            for answer in p.quips.iter().flat_map(|q| &q.answers) {
+                let filled = placeholders::fill(answer, language, Local::now().naive_local(), p.started.elapsed());
+                assert!(!filled.contains(['{', '}']), "{answer}");
+            }
+        }
+        let mut p = Persona::kitt(Language::German, DEFAULT_NAME);
+        for line in ["Welcher Wochentag ist heute?", "Der Wievielte ist heute?", "Wie lange reden wir schon?"] {
+            assert!(!p.quip(line).unwrap().contains('{'), "{line}");
+        }
+        let mut p = Persona::kitt(Language::English, DEFAULT_NAME);
+        for line in ["What day is it?", "What's the date?", "How long have we been talking?"] {
+            assert!(!p.quip(line).unwrap().contains('{'), "{line}");
+        }
+    }
+
+    #[test]
+    fn only_questions_about_now_get_the_clock() {
+        let mut p = Persona::kitt(Language::German, DEFAULT_NAME);
+        for line in [
+            "Zum wievielten Mal sagst du das?",
+            "Zu welcher Uhrzeit fährt der Zug?",
+            "An welchem Wochentag ist Weihnachten?",
+        ] {
+            assert_eq!(p.quip(line), None, "{line}");
+        }
+        for line in ["Wie spät ist es?", "Wieviel Uhr ist es?", "Den Wievielten haben wir?"] {
+            assert!(p.quip(line).is_some(), "{line}");
+        }
+        let mut p = Persona::kitt(Language::English, DEFAULT_NAME);
+        for line in ["What time does the train leave?", "What date is the meeting?"] {
+            assert_eq!(p.quip(line), None, "{line}");
+        }
+        for line in ["What time is it?", "What's the time?"] {
+            assert!(p.quip(line).is_some(), "{line}");
         }
     }
 

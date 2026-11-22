@@ -1,0 +1,9 @@
+/target
+# Recordings and cloned voices are never shared, see README, "Legal".
+/samples
+/out
+*.safetensors
+*.wav
+*.mp3
+*.m4a
+*.mp4

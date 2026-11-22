@@ -2,6 +2,7 @@
 //! (`conversation::Agent`). `process` turns its events into Godot signals each frame.
 
 use crate::conversation::{Agent, AgentConfig, AgentEvent, State};
+use crate::speak::fish::FishConfig;
 use crate::think::language::Language;
 use crate::think::persona::DEFAULT_NAME;
 use crate::think::remote_llm::{Provider, RemoteConfig};
@@ -40,6 +41,13 @@ pub struct PalNode {
     /// Pocket TTS catalog voice for `language`; takes effect on `start`.
     #[export]
     pocket_voice: GString,
+    /// Fish Audio speaks when both key and voice ID are set; takes effect on `start`.
+    #[export]
+    fish_api_key: GString,
+    #[export]
+    fish_voice_id: GString,
+    #[export]
+    fish_model: GString,
     /// "de" or "en": what Pal listens for and speaks; takes effect on `start`.
     #[export]
     language: GString,
@@ -87,6 +95,9 @@ impl INode for PalNode {
             stopping: None,
             pending_start: None,
             pocket_voice: "juergen".into(),
+            fish_api_key: GString::new(),
+            fish_voice_id: GString::new(),
+            fish_model: GString::new(),
             language: "de".into(),
             barge_in: true,
             smart_turn: true,
@@ -192,12 +203,18 @@ impl PalNode {
             }
         };
         let user_name = self.user_name.to_string();
+        let fish = (!self.fish_api_key.is_empty() && !self.fish_voice_id.is_empty()).then(|| FishConfig {
+            api_key: self.fish_api_key.to_string(),
+            voice_id: self.fish_voice_id.to_string(),
+            model: self.fish_model.to_string(),
+        });
         self.agent = Some(Agent::start(AgentConfig {
             model_dir: dir,
             smart_turn: self.smart_turn,
             stt_model: self.stt_model.to_string(),
             llm_model: self.llm_model.to_string(),
             voice: self.pocket_voice.to_string(),
+            fish,
             barge_in: self.barge_in,
             language,
             user_name: if user_name.trim().is_empty() { DEFAULT_NAME.into() } else { user_name },

@@ -1,3 +1,4 @@
+# Unused since the HAL view was removed. Can be deleted with godot/hal.gdshader and godot/hal_panel.png(.import).
 """Renders HAL's eye on black in a glossy 70s style: polished chrome bezel, dark rings, black glass disc, dark red lens
 rim and crisp reflections. godot/hal.gdshader adds the red light; LENS_* must match the shader's lens_center and
 lens_radius. Drawn at twice the size and scaled down, so edges stay sharp but smooth.

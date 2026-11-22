@@ -1,4 +1,5 @@
 shader_type canvas_item;
+// Unused since the HAL view was removed. Can be deleted with hal_panel.png(.import) and scripts/make-hal-panel.py.
 // HAL 9000: the eye is an image (scripts/make-hal-panel.py); only the red light is drawn here, added on top so the
 // reflections in the image stay visible.
 

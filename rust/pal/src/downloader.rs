@@ -219,8 +219,8 @@ mod tests {
                 }
             }
         }
-        let own = format!("pocket/voices/{}/kitt.safetensors", Language::ALL[0].code());
-        assert_eq!(pocket_files(Language::ALL[0], "kitt").last(), Some(&own));
+        let own = format!("pocket/voices/{}/my_voice.safetensors", Language::ALL[0].code());
+        assert_eq!(pocket_files(Language::ALL[0], "my_voice").last(), Some(&own));
         assert_eq!(SILERO.0, all_files()[0]);
     }
 }

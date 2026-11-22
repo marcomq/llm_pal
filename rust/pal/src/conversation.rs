@@ -40,6 +40,7 @@ use tokio::runtime::Handle;
 use crate::downloader;
 use crate::hear::event::{Event, Segment};
 use crate::hear::mic::{self, MicConfig, MicLink};
+use crate::speak::fish::FishConfig;
 use crate::speak::playback::PlaybackState;
 use crate::speak::tts::{self, PocketSpeaker};
 use crate::think::brain::Model;
@@ -63,6 +64,8 @@ pub struct AgentConfig {
     pub llm_model: String,
     /// Kyutai Pocket TTS voice, such as "juergen".
     pub voice: String,
+    /// Fish Audio speaks instead of `voice`, which still loads and takes over when Fish gives no audio.
+    pub fish: Option<FishConfig>,
     /// Speech during output stops it, with Pal's voice removed from the microphone; otherwise such speech is
     /// ignored.
     pub barge_in: bool,
@@ -282,9 +285,9 @@ fn load(cfg: &AgentConfig, shared: &Shared, persona: &Persona, rt: &Handle) -> R
         }
     });
     let pocket = std::thread::spawn({
-        let (voice, language) = (voice_file.to_string_lossy().into_owned(), cfg.language);
+        let (voice, language, fish) = (voice_file.to_string_lossy().into_owned(), cfg.language, cfg.fish.clone());
         move || {
-            let speaker = PocketSpeaker::new(&voice, language)?;
+            let speaker = PocketSpeaker::with_fish(&voice, language, fish)?;
             took("voice ready");
             Ok(speaker)
         }
@@ -415,7 +418,12 @@ impl Conversation {
         match &input {
             Some(Input::Event(Event::Lost)) => return Err(Error::Audio("the microphone stopped".into())),
             Some(Input::Spoken(Spoken::Audible { turn, at })) => self.audible(turn, *at),
-            Some(Input::Spoken(Spoken::Quiet)) => self.mic.output_active.store(false, Ordering::Relaxed),
+            Some(Input::Spoken(Spoken::Quiet)) => {
+                self.mic.output_active.store(false, Ordering::Relaxed);
+                if let Some(party) = &mut self.party {
+                    party.voice_ended();
+                }
+            }
             _ => {}
         }
         self.phase = match (std::mem::replace(&mut self.phase, Phase::Listening), input) {

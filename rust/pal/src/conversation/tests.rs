@@ -79,6 +79,7 @@ fn pal(t: &Topics, barge_in: bool) -> (Conversation, Receiver<AgentEvent>) {
         stt_model: String::new(),
         llm_model: String::new(),
         voice: String::new(),
+        fish: None,
         barge_in,
         language: Language::German,
         user_name: DEFAULT_NAME.into(),

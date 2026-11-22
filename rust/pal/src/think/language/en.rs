@@ -1,6 +1,6 @@
 //! English: Pal's prompt, sample turns, jokes and the words the code needs.
 
-use super::{Numbers, Profile};
+use super::{Clock, Numbers, Profile};
 
 pub(super) const PROFILE: Profile = Profile {
     code: "en",
@@ -40,7 +40,7 @@ Never repeat it and never write square brackets yourself.",
     ],
     joke_intros: &["Gladly, Michael.", "But of course, Michael.", "One more, Michael.", "Listen to this, Michael."],
     joke_words: &["joke", "jokes"],
-    call_words: &["kitt", "kit"],
+    call_words: &["kitt", "kit", "kitty"],
     silence_prompt: "Last said in the room: {talk} \
 Make a short, witty comment on exactly what was said.",
     continues: &["and", "but", "or", "because", "if"],
@@ -56,7 +56,83 @@ Make a short, witty comment on exactly what was said.",
         say,
         year,
     },
+    clock: Clock {
+        weekdays: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"],
+        time,
+        date,
+        duration,
+    },
 };
+
+const MONTHS: [&str; 12] = [
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December",
+];
+
+/// "two oh five in the afternoon", "noon".
+fn time(hour: u32, minute: u32) -> String {
+    match (hour, minute) {
+        (0, 0) => return "midnight".into(),
+        (12, 0) => return "noon".into(),
+        _ => {}
+    }
+    let h = ONES[if hour % 12 == 0 { 12 } else { hour as usize % 12 }];
+    let said = match minute {
+        0 => format!("{h} o'clock"),
+        m if m < 10 => format!("{h} oh {}", ONES[m as usize]),
+        m => format!("{h} {}", below_100(m.into())),
+    };
+    let part = match hour {
+        5..=11 => "in the morning",
+        12..=17 => "in the afternoon",
+        18..=21 => "in the evening",
+        _ => "at night",
+    };
+    format!("{said} {part}")
+}
+
+/// "November twenty-second".
+fn date(day: u32, month: u32) -> String {
+    format!("{} {}", MONTHS[month as usize - 1], ordinal(day.into()))
+}
+
+fn ordinal(n: u64) -> String {
+    match n {
+        1 => "first".into(),
+        2 => "second".into(),
+        3 => "third".into(),
+        5 => "fifth".into(),
+        8 => "eighth".into(),
+        9 => "ninth".into(),
+        12 => "twelfth".into(),
+        20 => "twentieth".into(),
+        30 => "thirtieth".into(),
+        n if n < 20 => format!("{}th", ONES[n as usize]),
+        n => format!("{}-{}", TENS[(n / 10) as usize], ordinal(n % 10)),
+    }
+}
+
+/// Fits "for …": "one hour and five minutes".
+fn duration(minutes: u64) -> String {
+    let unit = |n: u64, name: &str| if n == 1 { format!("one {name}") } else { format!("{} {name}s", say(n)) };
+    let (h, m) = (minutes / 60, minutes % 60);
+    match (h, m) {
+        (0, 0) => "almost a minute".into(),
+        (0, m) => unit(m, "minute"),
+        (h, 0) => unit(h, "hour"),
+        (h, m) => format!("{} and {}", unit(h, "hour"), unit(m, "minute")),
+    }
+}
 
 const ONES: [&str; 20] = [
     "zero",

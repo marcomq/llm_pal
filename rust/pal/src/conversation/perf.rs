@@ -99,6 +99,7 @@ impl Pal {
             stt_model: String::new(),
             llm_model: String::new(),
             voice: String::new(),
+            fish: None,
             barge_in: false,
             language: LANG,
             user_name: DEFAULT_NAME.into(),

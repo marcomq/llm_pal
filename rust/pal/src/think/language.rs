@@ -43,6 +43,19 @@ pub struct Profile {
     /// Words the voice reads wrong, with a spelling it reads right.
     pub pronunciations: &'static [(&'static str, &'static str)],
     pub numbers: Numbers,
+    pub clock: Clock,
+}
+
+/// How the quips' placeholders are said.
+pub struct Clock {
+    /// Monday first.
+    pub weekdays: [&'static str; 7],
+    /// Hour (0 to 23) and minute.
+    pub time: fn(u32, u32) -> String,
+    /// Day and month (1 to 12).
+    pub date: fn(u32, u32) -> String,
+    /// Whole minutes.
+    pub duration: fn(u64) -> String,
 }
 
 /// How numbers are written and read aloud.

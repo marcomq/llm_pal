@@ -1,15 +1,10 @@
-[gd_scene load_steps=7 format=3]
+[gd_scene load_steps=4 format=3]
 
 [ext_resource type="Script" path="res://main.gd" id="1"]
 [ext_resource type="Shader" path="res://kitt.gdshader" id="2"]
-[ext_resource type="Shader" path="res://hal.gdshader" id="3"]
-[ext_resource type="Texture2D" path="res://hal_panel.png" id="4"]
 
 [sub_resource type="ShaderMaterial" id="ShaderMaterial_kitt"]
 shader = ExtResource("2")
-
-[sub_resource type="ShaderMaterial" id="ShaderMaterial_hal"]
-shader = ExtResource("3")
 
 [node name="Main" type="Control"]
 layout_mode = 3
@@ -32,20 +27,6 @@ grow_horizontal = 2
 grow_vertical = 2
 mouse_filter = 2
 color = Color(0, 0, 0, 1)
-
-[node name="Hal" type="TextureRect" parent="."]
-visible = false
-material = SubResource("ShaderMaterial_hal")
-layout_mode = 1
-anchors_preset = 15
-anchor_right = 1.0
-anchor_bottom = 1.0
-grow_horizontal = 2
-grow_vertical = 2
-mouse_filter = 2
-texture = ExtResource("4")
-expand_mode = 1
-stretch_mode = 6
 
 [node name="Status" type="Label" parent="."]
 layout_mode = 1
@@ -73,15 +54,6 @@ theme_override_font_sizes/font_size = 32
 horizontal_alignment = 1
 vertical_alignment = 1
 
-[node name="Display" type="Label" parent="."]
-layout_mode = 1
-offset_right = 120.0
-offset_bottom = 80.0
-theme_override_colors/font_color = Color(0.6, 0.15, 0.1, 1)
-theme_override_font_sizes/font_size = 32
-horizontal_alignment = 1
-vertical_alignment = 1
-
 [node name="Menu" type="Label" parent="."]
 layout_mode = 1
 anchors_preset = 1
@@ -99,8 +71,7 @@ vertical_alignment = 1
 
 [node name="Party" type="Label" parent="."]
 layout_mode = 1
-offset_left = 120.0
-offset_right = 260.0
+offset_right = 140.0
 offset_bottom = 80.0
 theme_override_colors/font_color = Color(0.6, 0.15, 0.1, 1)
 theme_override_font_sizes/font_size = 32

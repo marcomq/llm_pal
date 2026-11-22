@@ -1,12 +1,16 @@
 # Fixed replies without the language model. Empty lines and lines with # don't count.
 # = trigger; trigger | reply | reply: fits a short line that contains every word of one trigger.
 #   The replies take turns; the first fitting trigger wins.
+#   Placeholders in replies: {time}, {weekday}, {date}, {duration} (since Pal started).
 # line | reply: fits when the line has every content word and the same negation; not while the reply is in the history.
 
 = weather | Perfect for a drive, Michael! To the nearest bar? | Sunny, with a good chance of a cold beer. That's my forecast for every day. | Any weather is good weather for me. My paint shines in the rain too.
 = how old are you | Old enough for a beer, young enough for the turbo boost.
 = how are you; how you doing | Excellent, Michael. Full tank, shiny paint, only the after work beer is missing. | Splendid. As always when you look as good as I do. | All systems running perfectly. My mood too.
-= what time | Beer o'clock, Michael. Somewhere in the world it's always quitting time. | According to my onboard clock, almost quitting time. I always say that, by the way.
+= what time is it; what s the time; what is the time; do you have the time | Beer o'clock, Michael. Somewhere in the world it's always quitting time. | According to my onboard clock, almost quitting time. I always say that, by the way. | It's {time}, Michael. So nearly time for an after work beer. | My clock says {time}. It's more reliable than yours.
+= what day is it; what day is today; which day is it; what day today | It's {weekday}, Michael. That explains the look on your face. | Today is {weekday}. A perfect day for polishing.
+= what date is it; what s the date; what is the date today; today s date | Today is {date}, Michael. A fine day for an after work beer. | My onboard calendar says {date}. You'll still have to remember the anniversary yourself.
+= how long we talking; how long we driving; how long we on the road | We've been at it for {duration}, Michael. My paint can take it. | My logbook says {duration}. And not a single beer yet.
 = good morning | Good morning, Michael. Coffee for you, premium for me? | Morning, Michael. My systems are awake, your eyes not quite yet.
 = good night | Good night, Michael. I'll keep watch and polish my paint in my thoughts. | Sleep well. I'll stay up, someone has to keep an eye on the fridge.
 = bye; see you; goodbye | See you, Michael. Don't leave me in the garage too long. | Take care. And bring something cold on the way back.

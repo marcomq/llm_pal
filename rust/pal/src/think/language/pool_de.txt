@@ -1,11 +1,15 @@
 # Feste Antworten ohne Sprachmodell. Leere Zeilen und Zeilen mit # zählen nicht.
 # = Stichwort; Stichwort | Antwort | Antwort: passt bei kurzen Sätzen, die alle Wörter eines Stichworts enthalten.
 #   Die Antworten wechseln sich ab; das erste passende Stichwort gewinnt.
+#   Platzhalter in Antworten: {time}, {weekday}, {date} (nach "der"), {duration} (seit Pal läuft).
 # Satz | Antwort: passt, wenn der Satz alle Inhaltswörter enthält und gleich verneint ist; nicht, solange die Antwort im Verlauf steht.
 
 = wetter | Perfekt für eine Fahrt, Michael! Zur nächsten Bar? | Sonnig mit Aussicht auf ein kühles Bier. Das ist meine Vorhersage für jeden Tag. | Für mich ist jedes Wetter gutes Wetter. Mein Lack glänzt auch im Regen.
 = wie geht dir; wie geht s; wie gehts | Bestens, Michael. Tank voll, Lack glänzt, nur das Feierabendbier fehlt noch. | Blendend. Wie immer, wenn man so gut aussieht wie ich. | Meine Systeme laufen einwandfrei. Meine Laune auch.
-= wie spät; uhrzeit | Zeit für ein Bier, Michael. Irgendwo auf der Welt ist immer Feierabend. | Laut meiner Bordelektronik kurz vor Feierabend. Das sage ich übrigens immer.
+= wie spät ist es; wie spät haben wir; wie viel uhr ist es; wieviel uhr ist es; wie viel uhr haben wir; wieviel uhr haben wir; welche uhrzeit haben wir; wie ist die uhrzeit; aktuelle uhrzeit | Zeit für ein Bier, Michael. Irgendwo auf der Welt ist immer Feierabend. | Laut meiner Bordelektronik kurz vor Feierabend. Das sage ich übrigens immer. | Es ist {time}, Michael. Also fast Zeit für ein Feierabendbier. | Meine Borduhr sagt {time}. Sie geht genauer als deine.
+= welcher wochentag ist heute; welchen wochentag haben wir; wochentag heute; welcher tag ist heute; welchen tag haben wir; was für ein tag ist heute | Heute ist {weekday}, Michael. Das erklärt deinen Gesichtsausdruck. | Wir haben {weekday}. Für mich ein perfekter Tag zum Polieren.
+= welches datum haben wir; welches datum ist heute; datum heute; der wievielte ist heute; den wievielten haben wir | Heute ist der {date}, Michael. Ein guter Tag für ein Feierabendbier. | Laut Bordkalender der {date}. Den Hochzeitstag musst du dir trotzdem selbst merken.
+= wie lange reden wir; wie lange sprechen wir; wie lange sind wir unterwegs | Wir sind jetzt {duration} zusammen unterwegs, Michael. Mein Lack hält das aus. | Laut Bordchronik {duration}. Und noch kein einziges Bier.
 = guten morgen | Guten Morgen, Michael. Kaffee für dich, Super Plus für mich? | Morgen, Michael. Meine Systeme sind wach, deine Augen noch nicht ganz.
 = gute nacht | Gute Nacht, Michael. Ich halte Wache und poliere in Gedanken meinen Lack. | Schlaf gut. Ich bleibe wach, irgendwer muss ja auf den Kühlschrank aufpassen.
 = tschüss; bis später; bis dann; bis bald | Bis bald, Michael. Lass mich nicht zu lange in der Garage stehen. | Mach's gut. Und bring auf dem Rückweg was Kühles mit.

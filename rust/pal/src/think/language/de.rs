@@ -1,6 +1,6 @@
 //! German: Pal's prompt, sample turns, jokes and the words the code needs.
 
-use super::{Numbers, Profile};
+use super::{Clock, Numbers, Profile};
 
 pub(super) const PROFILE: Profile = Profile {
     code: "de",
@@ -38,7 +38,7 @@ Wiederhole ihn nie und schreibe selbst nie eckige Klammern.",
     jokes: include_str!("jokes_de.txt"),
     joke_intros: &["Gern, Michael.", "Aber natürlich, Michael.", "Einer geht noch, Michael.", "Pass auf, Michael."],
     joke_words: &["witz", "witze"],
-    call_words: &["kitt", "kit"],
+    call_words: &["kitt", "kit", "kid", "kitty"],
     silence_prompt: "Zuletzt im Raum gesagt: {talk} \
 Gib einen kurzen, witzigen Kommentar genau zu dem Gesagten ab.",
     pool: include_str!("pool_de.txt"),
@@ -65,7 +65,62 @@ Gib einen kurzen, witzigen Kommentar genau zu dem Gesagten ab.",
         say,
         year,
     },
+    clock: Clock {
+        weekdays: ["Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag", "Sonntag"],
+        time,
+        date,
+        duration,
+    },
 };
+
+const MONTHS: [&str; 12] = [
+    "Januar",
+    "Februar",
+    "März",
+    "April",
+    "Mai",
+    "Juni",
+    "Juli",
+    "August",
+    "September",
+    "Oktober",
+    "November",
+    "Dezember",
+];
+
+/// "vierzehn Uhr fünf", "ein Uhr".
+fn time(hour: u32, minute: u32) -> String {
+    let h = if hour == 1 { "ein".to_string() } else { say(hour.into()) };
+    if minute == 0 { format!("{h} Uhr") } else { format!("{h} Uhr {}", say(minute.into())) }
+}
+
+/// Follows "der": "zweiundzwanzigste November".
+fn date(day: u32, month: u32) -> String {
+    format!("{} {}", ordinal(day.into()), MONTHS[month as usize - 1])
+}
+
+fn ordinal(n: u64) -> String {
+    match n {
+        1 => "erste".into(),
+        3 => "dritte".into(),
+        7 => "siebte".into(),
+        8 => "achte".into(),
+        n if n < 20 => format!("{}te", ONES[n as usize]),
+        n => format!("{}ste", below_100(n, false)),
+    }
+}
+
+/// Fits "jetzt …": "eine Stunde und fünf Minuten".
+fn duration(minutes: u64) -> String {
+    let unit = |n: u64, one: &str, many: &str| if n == 1 { one.to_string() } else { format!("{} {many}", say(n)) };
+    let (h, m) = (minutes / 60, minutes % 60);
+    match (h, m) {
+        (0, 0) => "knapp eine Minute".into(),
+        (0, m) => unit(m, "eine Minute", "Minuten"),
+        (h, 0) => unit(h, "eine Stunde", "Stunden"),
+        (h, m) => format!("{} und {}", unit(h, "eine Stunde", "Stunden"), unit(m, "eine Minute", "Minuten")),
+    }
+}
 
 const ONES: [&str; 20] = [
     "null",

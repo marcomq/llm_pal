@@ -43,7 +43,7 @@ case "${1:-}" in
     # A standalone call, so `set -e` stops on a failed build instead of installing an old APK.
     install) build_android
         adb install -r "$APK"
-        # Own voices (e.g. kitt) are never downloaded, so they go onto the phone here, into the folder the app
+        # Own voices are never downloaded, so they go onto the phone here, into the folder the app
         # made: one made by adb belongs to the shell user and the app could not write into it.
         if [ -d models/pocket/voices ]; then
             if adb shell test -d "$PHONE_MODELS/pocket"; then
