@@ -20,63 +20,6 @@ use crate::hear::event::{Event, Segment};
 use crate::think::prosody_tags::ProsodyTags;
 use crate::transport::Input;
 
-/// What a turn answers: speech up to a pause (`true`) or its end, or in party mode the room's talk before a
-/// silence with the model's prompt about it.
-pub(super) enum Cue {
-    Speech(Segment, bool),
-    Silence { talk: Vec<String>, prompt: String },
-}
-
-/// One turn's milestones, logged in ms from the end of speech once its first audio played; negative for a reply
-/// prepared during a pause.
-pub(super) struct Timing {
-    turn: String,
-    ended: Instant,
-    marks: Vec<(&'static str, Option<Instant>)>,
-    reply: String,
-    stt_ms: u128,
-    total_ms: u128,
-}
-
-/// A started turn, until its reply is done.
-pub(super) struct Turn {
-    pub(super) id: String,
-    pub(super) p: Prepared,
-    /// Held back until the speech really ends; starts as `p.early`.
-    pub(super) held: bool,
-    /// A held reply's final segment that sounds unfinished, and when it arrived: the reply is released
-    /// `UNFINISHED_WAIT` later unless the user goes on.
-    pub(super) ending: Option<(Instant, Segment)>,
-    t0: Instant,
-    sent_at: Instant,
-    pub(super) tags_before: ProsodyTags,
-    pub(super) spoken: Vec<String>,
-    pub(super) first_piece: Option<Instant>,
-    pub(super) first_sentence: Option<Instant>,
-    /// When its first sentence began to play.
-    pub(super) first_audio: Option<Instant>,
-}
-
-impl Timing {
-    /// Logs the milestones and reports the turn; `audio` is when its first sound played, if it did.
-    pub(super) fn finish(self, audio: Option<Instant>, send: &dyn Fn(AgentEvent)) {
-        let ms = |at: Instant| match at.checked_duration_since(self.ended) {
-            Some(after) => after.as_millis() as i64,
-            None => -(self.ended.duration_since(at).as_millis() as i64),
-        };
-        let parts: Vec<String> = (self.marks.iter().copied().chain([("audio", audio)]))
-            .map(|(name, at)| at.map_or(format!("{name} -"), |at| format!("{name} {}", ms(at))))
-            .collect();
-        eprintln!("llm_pal: {} ms after end of speech: {}", self.turn, parts.join(", "));
-        send(AgentEvent::TurnDone {
-            reply: self.reply,
-            stt_ms: self.stt_ms,
-            first_sentence_ms: audio.map(|at| at.saturating_duration_since(self.ended).as_millis()),
-            total_ms: self.total_ms,
-        });
-    }
-}
-
 impl Conversation {
     /// What the input asks Pal to answer, if anything. A reply to a pause is prepared but held back until the
     /// segment really ends.
@@ -250,5 +193,62 @@ impl Conversation {
         }
         self.tags = t.tags_before;
         Phase::Listening
+    }
+}
+
+/// A started turn, until its reply is done.
+pub(super) struct Turn {
+    pub(super) id: String,
+    pub(super) p: Prepared,
+    /// Held back until the speech really ends; starts as `p.early`.
+    pub(super) held: bool,
+    /// A held reply's final segment that sounds unfinished, and when it arrived: the reply is released
+    /// `UNFINISHED_WAIT` later unless the user goes on.
+    pub(super) ending: Option<(Instant, Segment)>,
+    t0: Instant,
+    sent_at: Instant,
+    pub(super) tags_before: ProsodyTags,
+    pub(super) spoken: Vec<String>,
+    pub(super) first_piece: Option<Instant>,
+    pub(super) first_sentence: Option<Instant>,
+    /// When its first sentence began to play.
+    pub(super) first_audio: Option<Instant>,
+}
+
+/// What a turn answers: speech up to a pause (`true`) or its end, or in party mode the room's talk before a
+/// silence with the model's prompt about it.
+pub(super) enum Cue {
+    Speech(Segment, bool),
+    Silence { talk: Vec<String>, prompt: String },
+}
+
+/// One turn's milestones, logged in ms from the end of speech once its first audio played; negative for a reply
+/// prepared during a pause.
+pub(super) struct Timing {
+    turn: String,
+    ended: Instant,
+    marks: Vec<(&'static str, Option<Instant>)>,
+    reply: String,
+    stt_ms: u128,
+    total_ms: u128,
+}
+
+impl Timing {
+    /// Logs the milestones and reports the turn; `audio` is when its first sound played, if it did.
+    pub(super) fn finish(self, audio: Option<Instant>, send: &dyn Fn(AgentEvent)) {
+        let ms = |at: Instant| match at.checked_duration_since(self.ended) {
+            Some(after) => after.as_millis() as i64,
+            None => -(self.ended.duration_since(at).as_millis() as i64),
+        };
+        let parts: Vec<String> = (self.marks.iter().copied().chain([("audio", audio)]))
+            .map(|(name, at)| at.map_or(format!("{name} -"), |at| format!("{name} {}", ms(at))))
+            .collect();
+        eprintln!("llm_pal: {} ms after end of speech: {}", self.turn, parts.join(", "));
+        send(AgentEvent::TurnDone {
+            reply: self.reply,
+            stt_ms: self.stt_ms,
+            first_sentence_ms: audio.map(|at| at.saturating_duration_since(self.ended).as_millis()),
+            total_ms: self.total_ms,
+        });
     }
 }
