@@ -1,6 +1,9 @@
 #!/bin/sh
-# Usage: ./build.sh setup | test | godot | android | install
+# Usage: ./build.sh setup | test | godot | android | release | install | version
 # android: debug APK in build/; install: also installs it. The app downloads missing models itself.
+# release: signed with GODOT_ANDROID_KEYSTORE_RELEASE_PATH / _USER / _PASSWORD. The version comes from
+# rust/Cargo.toml; bump it, then tag the release as v<version>. version/code is major*10000 + minor*100 + patch,
+# so minor and patch must stay below 100.
 set -eu
 cd "$(dirname "$0")"
 GODOT="${GODOT:-godot}"
@@ -19,8 +22,28 @@ run_godot() {
     "$GODOT" --path godot
 }
 
+version() {
+    sed -n 's/^version = "\(.*\)"/\1/p' rust/Cargo.toml | head -n 1
+}
+
+# Writes the Cargo version into the Android export preset.
+sync_version() {
+    v=$(version)
+    code=$(echo "$v" | awk -F. '/^[0-9]+\.[0-9]+\.[0-9]+$/ && $2 < 100 && $3 < 100 {
+        code = $1 * 10000 + $2 * 100 + $3
+        if (code <= 2100000000) { printf "%d\n", code; ok = 1 }
+    } END { exit !ok }') || {
+        echo "version $v needs the form major.minor.patch, minor and patch below 100, code at most 2100000000" >&2
+        exit 1
+    }
+    sed "s/^version\/name=.*/version\/name=\"$v\"/; s/^version\/code=.*/version\/code=$code/" \
+        godot/export_presets.cfg > godot/export_presets.cfg.tmp
+    mv godot/export_presets.cfg.tmp godot/export_presets.cfg
+}
+
 # Godot extension for arm64 Android, then the APK. Godot's template already ships libc++_shared.so.
 build_android() {
+    sync_version
     # llama-cpp-sys-2 reads ANDROID_NDK, cargo-ndk ANDROID_NDK_HOME.
     export ANDROID_NDK_HOME="$NDK" ANDROID_NDK="$NDK"
     # ggml's int8 dot-product kernels (all arm64 phones since ~2018); without them the LLM runs at ~1 token/s.
@@ -31,7 +54,7 @@ build_android() {
     # The unstripped library stays in $out, for ndk-stack.
     strip=$(ls "$NDK"/toolchains/llvm/prebuilt/*/bin/llvm-strip | head -n 1)
     "$strip" --strip-debug -o godot/bin/android/libpal.so "$out/libpal.so"
-    (cd godot && "$GODOT" --headless --import && "$GODOT" --headless --export-debug Android)
+    (cd godot && "$GODOT" --headless --import && "$GODOT" --headless "--${EXPORT:-export-debug}" Android)
 }
 
 case "${1:-}" in
@@ -40,10 +63,12 @@ case "${1:-}" in
     test) (cd rust && cargo test --release --workspace -- --include-ignored --skip reply:: --skip download_models) ;;
     godot) run_godot ;;
     android) build_android ;;
+    release) EXPORT=export-release build_android ;;
+    version) version ;;
     # A standalone call, so `set -e` stops on a failed build instead of installing an old APK.
     install) build_android
         adb install -r "$APK"
-        # Own voices (e.g. kitt) are never downloaded, so they go onto the phone here, into the folder the app
+        # Own voices are never downloaded, so they go onto the phone here, into the folder the app
         # made: one made by adb belongs to the shell user and the app could not write into it.
         if [ -d models/pocket/voices ]; then
             if adb shell test -d "$PHONE_MODELS/pocket"; then
@@ -52,5 +77,5 @@ case "${1:-}" in
                 echo "start Pal once so it creates $PHONE_MODELS/pocket, then install again for the own voices" >&2
             fi
         fi ;;
-    *) echo "usage: $0 setup | test | godot | android | install" >&2; exit 1 ;;
+    *) echo "usage: $0 setup | test | godot | android | release | install | version" >&2; exit 1 ;;
 esac

@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 use crate::speak::playback::{Playback, PlaybackState};
 use pal_tts::PocketTts;
 
+use crate::speak::fish::{Fish, FishConfig};
 use crate::speak::leveler::Leveler;
 use crate::speak::voice_filter::VoiceFilter;
 use crate::think::language::Language;
@@ -46,6 +47,11 @@ impl PocketSpeaker {
     /// `voice` is a Pocket TTS catalog name such as "juergen" or a `.safetensors` voice file. Blocks until the
     /// model is loaded.
     pub fn new(voice: &str, language: Language) -> Result<Self> {
+        Self::with_fish(voice, language, None)
+    }
+
+    /// Like [`Self::new`]; with `fish`, Fish Audio speaks and Pocket takes over when it gives no audio.
+    pub fn with_fish(voice: &str, language: Language, fish: Option<FishConfig>) -> Result<Self> {
         xn::set_num_threads(crate::cpu::fast_cores());
         let tts = PocketTts::load(language.profile().pocket_model, voice)
             .map_err(|e| Error::Tts(format!("pocket tts: {e:#}")))?;
@@ -123,16 +129,19 @@ impl PocketSpeaker {
         std::thread::spawn(move || {
             let mut leveler = Leveler::default();
             let mut filter = VoiceFilter::new(rate);
+            let mut fish = fish.map(Fish::new);
             for (gen_of_text, turn, text) in rx {
                 if gen_of_text == g.load(Ordering::SeqCst) {
                     c.store(false, Ordering::SeqCst);
                     let _ = audio_tx.send(Audio::Begin(gen_of_text, turn));
                     let audio_tx = audio_tx.clone();
-                    let result = tts.synthesize(&text, &c, &mut |pcm| {
-                        audio_tx.send(Audio::Chunk(gen_of_text, leveler.apply(&filter.apply(pcm)))).map_err(Into::into)
-                    });
-                    if let Err(e) = result {
-                        eprintln!("llm_pal: pocket tts: {e:#}");
+                    let mut play =
+                        |pcm: &[f32]| audio_tx.send(Audio::Chunk(gen_of_text, leveler.apply(&filter.apply(pcm))));
+                    if !fish.as_mut().is_some_and(|fish| fish.say(&text, rate, &c, &mut play)) {
+                        let result = tts.synthesize(&text, &c, &mut |pcm| play(pcm).map_err(Into::into));
+                        if let Err(e) = result {
+                            eprintln!("llm_pal: pocket tts: {e:#}");
+                        }
                     }
                 }
                 let _ = audio_tx.send(Audio::End);

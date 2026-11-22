@@ -10,7 +10,8 @@ the user by name (default "Michael", spoken "Maikel"). Rust workspace in `rust/`
 |---|---|
 | `rust/pal` | The app, one crate. `godot.rs` `PalNode` (entry), `conversation/` the main loop, `hear/` microphone → text, `think/` persona and LLM, `speak/` text → sound, `transport.rs` the mq-bridge connections, `downloader.rs` models, `platform/` Android vs. desktop |
 | `rust/pal-tts` | Kyutai Pocket TTS, copied from kyutai-labs/pocket-tts. Don't reformat or edit except for marked "pal-tts change" spots |
-| `godot/` | UI (`main.gd`, `main.tscn`), settings form (`settings.gd`), KITT/HAL shaders |
+| `godot/` | UI (`main.gd`, `main.tscn`), settings form (`settings.gd`), KITT shader |
+| `generate_voice` | Separate crate `pal-voice`, not in the workspace or the APK: makes a voice of one's own from a recording. Needs Kyutai's gated cloning model |
 
 Paths below are relative to `rust/pal/src`. `platform/desktop.rs` is empty; `platform/android.rs` has the same three
 functions (`init_audio`, `init_log`, `background_thread`). No `cfg(target_os)` outside `platform/`.
@@ -50,8 +51,9 @@ conversation and with it the reply routes, the agent's thread stops the input si
 6. **User line**: `Persona::user_line(text, tags)`: transcript + prosody tags (`prosody_tags.rs`). The tags go
    last, so a line that grows keeps its start. This line goes into the history and the UI (`AgentEvent::Heard`).
 7. **Canned replies** (no LLM): `persona.joke`, `persona.quip`, `persona.pooled` in `persona.rs`. Texts in
-   `think/language/` (`jokes_*.txt`, `pool_*.txt`, `de.rs`, `en.rs`). `pooled` only matches lines negated
-   like the transcript.
+   `think/language/` (`kitt_*.txt`, `de.rs`, `en.rs`). `pooled` only matches lines negated
+   like the transcript. Quips may use `{time}`, `{weekday}`, `{date}`, `{duration}` (`think/placeholders.rs`, said per
+   language by `Profile.clock`).
 8. **Enrichment**: `enrich::prompt_line(text, line, language)` in `think/enrich.rs`. Add lookups in
    `facts()`. The result goes only into this turn's prompt, never into the history. It runs before every LLM reply,
    so its time adds directly to `first_sentence_ms`.
@@ -67,7 +69,8 @@ cut the last reply in the history to the sentences that began to play (counted f
 words, or room talk in party mode, or `RESUME_AFTER` of quiet without a segment: the voice goes on.
 
 **Party mode** (`AgentConfig.party`, `think/party.rs`): after step 6 a line that neither calls Pal
-(`call_words`, e.g. "KITT") nor asks for a joke is only kept as room talk. After 5 s of silence following such talk,
+(`call_words`, e.g. "KITT") nor asks for a joke is only kept as room talk, unless it begins within 8 s after Pal's
+voice ended on a question and doesn't overlap it (`Party::addressed`). After 5 s of silence following such talk,
 Pal says a quip or pool reply to one of its lines, or else the model comments on it (`silence_prompt`); once per talk.
 
 ## mq-bridge
@@ -80,7 +83,7 @@ Topics, routes and reports: the diagram at the top of `transport.rs`. What it do
   `interrupt`/`discard` cancel a turn in all routes.
 - The conversation reaches the voice only over `pal.speech`; the conversation's route handler (`conversation_handler`)
   keeps a `PocketSpeaker` clone only to cut it off at the end. `canned` sends a fixed text through the same path as the model.
-- **Tokens** on `pal.pieces` use mq-bridge's `stream_to` format for every source (server, local model, canned):
+- **Tokens** on `pal.speech` use mq-bridge's `stream_to` format for every source (server, local model, canned):
   `correlation_id` = turn, `mqb.stream.index`, `mqb.stream.end`; the last token's `mqb.stream.status` is
   `complete`, `error` (payload = error text) or `cancelled`.
 - `pal_tick` needs batch size 1, else `static` fills the whole batch at once.
@@ -111,7 +114,7 @@ Topics, routes and reports: the diagram at the top of `transport.rs`. What it do
 - `remote_llm.rs`: builds the mq-bridge endpoint: `openai_chat` with `messages_from_payload` for Ollama and OpenAI,
   the streaming `http_bulk` recipe for Anthropic's `/messages`. Both stream to `pal.llm.tokens` (`stream_to`) and
   stop on `pal.llm.cancel` (`cancel_from`, sent by `Transport::cancel`). `brain::Server` reads them back (`transport::StreamCall`)
-  and the `pal_llm` handler passes them on to `pal.pieces`. Timeout: 30 s per silence of the server, no overall timeout (streams may be long).
+  and the `pal_llm` handler passes them on to `pal.speech`. Timeout: 30 s per silence of the server, no overall timeout (streams may be long).
 - reqwest's platform verifier is not initialised on Android, so `remote_llm.rs` sets `tls.ca_file = "$.bundled"`
   (mq-bridge's built-in Mozilla roots) for every server.
 - The local fallback runs only if the server's last token is `error` at index 0 (no text) and the turn wasn't
@@ -125,27 +128,45 @@ thread looks every 20 ms and reports to `pal.inbox`: `Spoken::Audible { turn, at
 silent (`speaking` = `MicLink::output_active`).
 Weights are quantized to q8_0 at load (`pal-tts/src/lib.rs`, `type Backend`): 2.4× faster than f32 on the Mac.
 `numbers.rs` writes digits as words (number words per language in `think/language/`), `leveler.rs` evens out loudness, `voice_filter.rs` adds KITT's speaker sound.
-Voice per language from the settings (`Settings.VOICES`, default `juergen`); `downloader.rs` lists the same voices.
+Voice per language from the settings (`Settings.VOICES`; default the first voice of one's own, else `juergen`); `downloader.rs` lists the same voices.
+Optional Fish Audio (`speak/fish.rs`, `AgentConfig.fish`), off until chosen as voice source (`voice/source`) in the settings: the user's own key, voice ID and model from the settings,
+never an environment variable and never a prefilled voice ID. It replaces only the generation; Pocket stays loaded and
+says a sentence Fish failed on (from its start, also after a break mid-sentence), and speaks alone for 60 s after a failure. Always send a model: Fish bills an
+unknown or missing one as paid.
 Voices of one's own: `pocket/voices/<de|en>/<name>.safetensors` in the model folder, made with the separate tool
-`pal-voice`, never downloaded (README, "Voices of one's own"). Only own voices or voices with the speaker's
+`generate_voice/`, never downloaded (README, "Voices of one's own"). The settings import them after a one-time consent
+(`voice/consent`); `speak/voice_file.rs` checks a file on import and at start (`PalNode.voice_error`), a broken one
+gives way to the first catalog voice. Only own voices or voices with the speaker's
 explicit consent; never add recordings or cloned voices to the repository or the APK.
 
 ## Godot
 
 - `PalNode` (`godot.rs`): vars `user_name`, `llm_provider` (`local`/`ollama`/`openai`/`anthropic`),
-  `llm_url`, `llm_remote_model`, `llm_api_key`, `llm_fallback`, `smart_turn`, `barge_in`, `party_mode`. Signals:
+  `llm_url`, `llm_remote_model`, `llm_api_key`, `llm_fallback`, `fish_api_key`, `fish_voice_id`, `fish_model`,
+  `smart_turn`, `barge_in`, `party_mode`. Signals:
   `ready_to_listen`, `heard`, `said`, `turn_done`, `interrupted`, `ignored`, `failed`, `reply_failed`.
-- `main.gd`: `_start()` copies settings onto `PalNode`. The "…" label or key S opens the settings form; the P0/P1
+- `main.gd`: subtitles (`You` above the voice box, `Reply` below, without prosody tags), brighter red while said. While nothing moves it draws
+  nothing and runs at `IDLE_FPS` (`low_processor_mode`); anything animated must count as `moving` in `_process`.
+  `_start()` copies settings onto `PalNode`. The "…" label or key S opens the settings form; the P0/P1
   label or key P switches party mode (`user/party`).
-- `settings.gd` (`Settings`): saves to `user://settings.cfg` (sections `user` incl. `party`, `voice`, `llm`); saving restarts Pal. An empty
+- `settings.gd` (`Settings`): saves to `user://settings.cfg` (sections `user` incl. `party`, `voice`, `persona`, `fish`, `llm`); saving restarts Pal. An empty
   URL means the provider default (in `settings.gd` and `remote_llm.rs`). An empty model is replaced by the provider's
   model default from `settings.gd` only; `remote_llm.rs` has no model default and sends the model as given.
+- Local models: `Settings.LOCAL_MODELS`, same files as `downloader.rs`, whose `ON_REQUEST` models are fetched only once
+  chosen (`llm/local_model`). A new one is on trial (`llm/trying_from`): `main.gd` goes back if it fails or the app
+  died before `ready_to_listen`. `llm/replaced` (the old model, or the new one if it failed) makes it ask before
+  `PalNode.remove_llm` once Pal is ready. `Settings.fits_ram` disables models too large for the device.
+- Characters: `think/character.rs`, files in `personas/<de|en>/<name>.txt` in the model folder, chosen per language
+  (`persona/<lang>`, empty = built-in). A file gets the language's `Profile.tag_rule` added and none of KITT's texts.
+  `PalNode.persona_file`; a file that can't be read falls back to the built-in character (`persona_error`). The
+  built-in KITT is such a file too (`think/language/kitt_<lang>.txt`). Changing a model or character sets
+  `llm/cache_stale`: the next start deletes all `.state` files (`remove_llm_caches`), a language switch doesn't.
 - Environment: `PAL_MODELS` (models folder), `PAL_LLM` (GGUF file), `PAL_SMART_TURN=0`, `PAL_BARGE_IN=0`,
   `PAL_RECORD_DIR` (saves each segment as WAV + transcript, for STT test data).
 
 ## Build, test, device
 
-- `./build.sh setup | test | godot | android | install` (see `README.md`).
+- `./build.sh setup | test | godot | android | release | install | version` (see `README.md`).
 - Everything builds in release (one build cache with `build.sh`): `cargo check --release`, unit tests
   `cargo test --release -p pal --lib`; the phases are tested over the topics in `conversation/tests.rs` (no models,
   no sound, STT a fake route); model tests in `pal/tests/main.rs`. Tests needing models or a

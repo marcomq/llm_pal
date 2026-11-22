@@ -1,7 +1,7 @@
 //! What travels on each topic, as one Rust type per topic: `[pal.inbox]` [`Input`], `[pal.llm]` [`LlmRequest`],
-//! `[pal.pieces]` [`Token`], `[pal.speech]` [`ToSpeaker`].
+//! `[pal.speech]` [`ToSpeaker`].
 //!
-//! A turn's data (requests, tokens, sentences) carries the turn in `correlation_id`. mq-bridge's `CancelHandle`
+//! A turn's data (requests, tokens) carries the turn in `correlation_id`. mq-bridge's `CancelHandle`
 //! cancels by that key, so a cancelled turn's waiting data is skipped in every stage. Control messages to the
 //! speaker (`Hold`, `Release`, `Discard`, `Stop`, `Pause`, `Resume`) carry the turn under `turn` instead: a cancel
 //! never drops them.
@@ -29,6 +29,11 @@ const STREAM_STATUS: &str = "mqb.stream.status";
 
 fn meta<'a>(msg: &'a CanonicalMessage, key: &str) -> &'a str {
     msg.metadata.get(key).map_or("", String::as_str)
+}
+
+/// The turn of a data or control message; empty for a message of no turn, such as a prefill.
+pub(super) fn turn_of(msg: &CanonicalMessage) -> String {
+    Some(meta(msg, CORRELATION_ID)).filter(|turn| !turn.is_empty()).unwrap_or(meta(msg, TURN)).to_string()
 }
 
 /// Logs a message as it reaches `route`, with its age: the time since its id was made.
@@ -105,9 +110,9 @@ pub enum End {
     Failed,
 }
 
-/// `[pal.pieces]`: a piece of a reply in mq-bridge's `stream_to` format, the same for the local model, a server
-/// and canned replies. The last token of a reply has `end` set and no text unless it failed.
-#[derive(Debug)]
+/// A piece of a reply in mq-bridge's `stream_to` format, the same for the local model, a server and canned replies.
+/// The last token of a reply has `end` set and no text unless it failed.
+#[derive(Debug, PartialEq, Eq)]
 pub struct Token {
     pub turn: String,
     pub index: usize,
@@ -166,37 +171,26 @@ pub enum ToSpeaker {
     /// Control: hold the voice where it is, e.g. while it is unclear whether the user interrupts.
     Pause,
     Resume,
-    /// Data: a sentence to speak.
-    Sentence(String),
-    /// Data: the turn's last sentence was sent.
-    End,
-    /// Data: the reply failed.
-    Error(String),
+    /// Data: a token of the reply. Tokens have no `KIND`, as a server's `stream_to` sends them.
+    Piece(Token),
 }
 
 impl ToSpeaker {
     pub fn to_message(&self, turn: &str) -> CanonicalMessage {
-        let (kind, text) = match self {
-            Self::Hold => ("hold", ""),
-            Self::Release => ("release", ""),
-            Self::Discard => ("discard", ""),
-            Self::Stop => ("stop", ""),
-            Self::Pause => ("pause", ""),
-            Self::Resume => ("resume", ""),
-            Self::Sentence(text) => ("sentence", text.as_str()),
-            Self::End => ("end", ""),
-            Self::Error(text) => ("error", text.as_str()),
+        let kind = match self {
+            Self::Hold => "hold",
+            Self::Release => "release",
+            Self::Discard => "discard",
+            Self::Stop => "stop",
+            Self::Pause => "pause",
+            Self::Resume => "resume",
+            Self::Piece(token) => return token.to_message(),
         };
-        let msg = CanonicalMessage::from(text).with_metadata_kv(KIND, kind);
-        match self {
-            Self::Sentence(_) | Self::End | Self::Error(_) => msg.with_metadata_kv(CORRELATION_ID, turn),
-            _ => msg.with_metadata_kv(TURN, turn),
-        }
+        CanonicalMessage::from("").with_metadata_kv(KIND, kind).with_metadata_kv(TURN, turn)
     }
 
     /// The turn and what to do; `None` for an unknown kind.
     pub fn from_message(msg: &CanonicalMessage) -> Option<(String, Self)> {
-        let text = || msg.get_payload_str().into_owned();
         let what = match meta(msg, KIND) {
             "hold" => Self::Hold,
             "release" => Self::Release,
@@ -204,16 +198,13 @@ impl ToSpeaker {
             "stop" => Self::Stop,
             "pause" => Self::Pause,
             "resume" => Self::Resume,
-            "sentence" => Self::Sentence(text()),
-            "end" => Self::End,
-            "error" => Self::Error(text()),
+            "" => {
+                let token = Token::from_message(msg);
+                return Some((token.turn.clone(), Self::Piece(token)));
+            }
             _ => return None,
         };
-        let turn = match meta(msg, CORRELATION_ID) {
-            "" => meta(msg, TURN),
-            turn => turn,
-        };
-        Some((turn.to_string(), what))
+        Some((meta(msg, TURN).to_string(), what))
     }
 }
 
@@ -359,7 +350,7 @@ mod tests {
             ("t1", 3, "boom", Some(End::Failed))
         );
 
-        for what in [ToSpeaker::Release, ToSpeaker::Sentence("Hallo.".into())] {
+        for what in [ToSpeaker::Release, ToSpeaker::Piece(Token::piece("t2", 0, "Hallo."))] {
             let msg = what.to_message("t2");
             let control = what == ToSpeaker::Release;
             assert_eq!(msg.metadata.contains_key(CORRELATION_ID), !control, "a cancel skips data only");

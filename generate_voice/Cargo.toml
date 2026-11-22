@@ -1,0 +1,14 @@
+[package]
+name = "pal-voice"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+pal-tts = { path = "../rust/pal-tts", features = ["download"] }
+hound = "3.5.1"
+
+[profile.release]
+debug = "line-tables-only"

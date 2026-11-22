@@ -1,5 +1,5 @@
 //! The phases over the topics: inputs go to `handle` as they would from `[pal.inbox]`, the tests read what reaches
-//! `[pal.llm]`, `[pal.pieces]` and `[pal.speech]`. STT is a route that answers with the transcript the test sets.
+//! `[pal.llm]` and `[pal.speech]`. STT is a route that answers with the transcript the test sets.
 //! No models, no sound.
 
 use std::sync::mpsc::{Receiver, channel};
@@ -16,7 +16,7 @@ use super::unfinished::UNFINISHED_WAIT;
 use super::*;
 use crate::hear::event::Features;
 use crate::think::persona::DEFAULT_NAME;
-use crate::transport::{LLM_IN, LlmRequest, PIECES, SPEECH, ToSpeaker};
+use crate::transport::{LLM_IN, LlmRequest, SPEECH, ToSpeaker};
 
 /// The topics are process-wide, so the tests take turns, `perf.rs` too: each turn starts on empty topics.
 pub(super) fn take_turn() -> (MutexGuard<'static, ()>, &'static Runtime) {
@@ -31,7 +31,6 @@ pub(super) fn take_turn() -> (MutexGuard<'static, ()>, &'static Runtime) {
 struct Topics {
     rt: &'static Runtime,
     llm: Receiver<CanonicalMessage>,
-    _pieces: Receiver<CanonicalMessage>,
     speech: Receiver<CanonicalMessage>,
     transcript: Arc<Mutex<String>>,
     _turn: MutexGuard<'static, ()>,
@@ -39,14 +38,14 @@ struct Topics {
 
 fn topics() -> Topics {
     let (turn, rt) = take_turn();
-    let (llm, pieces, speech) = (collect(rt, LLM_IN), collect(rt, PIECES), collect(rt, SPEECH));
-    Topics { rt, llm, _pieces: pieces, speech, transcript: Arc::default(), _turn: turn }
+    let (llm, speech) = (collect(rt, LLM_IN), collect(rt, SPEECH));
+    Topics { rt, llm, speech, transcript: Arc::default(), _turn: turn }
 }
 
 impl Drop for Topics {
     fn drop(&mut self) {
         self.rt.block_on(async {
-            for topic in [LLM_IN, PIECES, SPEECH] {
+            for topic in [LLM_IN, SPEECH] {
                 Route::stop(&format!("test_{topic}")).await;
             }
         });
@@ -80,12 +79,14 @@ fn pal(t: &Topics, barge_in: bool) -> (Conversation, Receiver<AgentEvent>) {
         stt_model: String::new(),
         llm_model: String::new(),
         voice: String::new(),
+        fish: None,
         barge_in,
         language: Language::German,
         user_name: DEFAULT_NAME.into(),
         remote: None,
         fallback: false,
         party: false,
+        persona: None,
     };
     let persona = Persona::kitt(cfg.language, &cfg.user_name);
     let (tx, events) = channel();

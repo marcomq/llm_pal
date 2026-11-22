@@ -10,67 +10,7 @@ use crate::think::enrich;
 use crate::think::persona::Persona;
 use crate::think::prosody_tags;
 
-pub(super) enum Reply {
-    Canned(String),
-    /// The model answers this prompt line.
-    Model(String),
-}
-
-/// A turn ready to start: what was heard and how Pal answers it.
-pub(super) struct Prepared {
-    pub(super) text: String,
-    pub(super) line: String,
-    pub(super) early: bool,
-    pub(super) ended: Option<Instant>,
-    pub(super) stt_ms: u128,
-    pub(super) text_at: Instant,
-    pub(super) reply: Reply,
-    /// The speech answered, with the carry before it.
-    pub(super) pcm: Vec<f32>,
-}
-
-/// When the user stopped speaking, for a segment that arrived at `at`.
-pub(super) fn speech_end(at: Instant, seg: &Segment) -> Instant {
-    at.checked_sub(Duration::from_millis(seg.silence_ms)).unwrap_or(at)
-}
-
-/// `PAL_RECORD_DIR`: each segment as 16 kHz WAV plus the recognised text, as STT test data.
-fn record(dir: &Path, pcm: &[f32], text: &str) -> std::result::Result<(), Box<dyn std::error::Error>> {
-    std::fs::create_dir_all(dir)?;
-    let name = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis().to_string();
-    let spec = hound::WavSpec {
-        channels: 1,
-        sample_rate: 16_000,
-        bits_per_sample: 16,
-        sample_format: hound::SampleFormat::Int,
-    };
-    let mut wav = hound::WavWriter::create(dir.join(format!("{name}.wav")), spec)?;
-    for s in pcm {
-        wav.write_sample((s.clamp(-1.0, 1.0) * 32767.0) as i16)?;
-    }
-    wav.finalize()?;
-    std::fs::write(dir.join(format!("{name}.stt.txt")), text)?;
-    Ok(())
-}
-
 impl Conversation {
-    /// Party mode: the room went quiet after talk Pal didn't answer.
-    pub(super) fn silence(&mut self, talk: Vec<String>, prompt: String, t0: Instant) -> Prepared {
-        eprintln!("llm_pal: the room went quiet");
-        let canned = talk.iter().rev().find_map(|t| self.persona.quip(t).or_else(|| self.persona.pooled(t)));
-        let reply = canned.map_or_else(|| Reply::Model(prompt.clone()), Reply::Canned);
-        Prepared {
-            text: talk.join(" "),
-            line: prompt,
-            early: false,
-            ended: Some(t0),
-            stt_ms: 0,
-            text_at: t0,
-            reply,
-            pcm: Vec::new(),
-        }
-    }
-
     /// The transcript of the speech and when it was ready; `None` if nothing was understood.
     pub(super) fn transcribe(&mut self, seg: &Segment, early: bool) -> Option<(String, Instant)> {
         // `seg.pcm` already starts with the carry; a final segment uses it up, whatever its transcript.
@@ -114,7 +54,7 @@ impl Conversation {
         let line = Persona::user_line(&text, &tags);
         let joke = self.persona.joke(&text);
         if let Some(party) = &mut self.party {
-            if joke.is_none() && !party.called(&text) {
+            if joke.is_none() && !party.addressed(&text) {
                 if early {
                     self.tags = tags_before;
                 } else {
@@ -140,4 +80,64 @@ impl Conversation {
         let ended = (!early).then(|| speech_end(t0, &seg));
         self.start(Prepared { text, line, early, ended, stt_ms, text_at, reply, pcm: seg.pcm }, t0, tags_before)
     }
+
+    /// Party mode: the room went quiet after talk Pal didn't answer.
+    pub(super) fn silence(&mut self, talk: Vec<String>, prompt: String, t0: Instant) -> Prepared {
+        eprintln!("llm_pal: the room went quiet");
+        let canned = talk.iter().rev().find_map(|t| self.persona.quip(t).or_else(|| self.persona.pooled(t)));
+        let reply = canned.map_or_else(|| Reply::Model(prompt.clone()), Reply::Canned);
+        Prepared {
+            text: talk.join(" "),
+            line: prompt,
+            early: false,
+            ended: Some(t0),
+            stt_ms: 0,
+            text_at: t0,
+            reply,
+            pcm: Vec::new(),
+        }
+    }
+}
+
+pub(super) enum Reply {
+    Canned(String),
+    /// The model answers this prompt line.
+    Model(String),
+}
+
+/// A turn ready to start: what was heard and how Pal answers it.
+pub(super) struct Prepared {
+    pub(super) text: String,
+    pub(super) line: String,
+    pub(super) early: bool,
+    pub(super) ended: Option<Instant>,
+    pub(super) stt_ms: u128,
+    pub(super) text_at: Instant,
+    pub(super) reply: Reply,
+    /// The speech answered, with the carry before it.
+    pub(super) pcm: Vec<f32>,
+}
+
+/// When the user stopped speaking, for a segment that arrived at `at`.
+pub(super) fn speech_end(at: Instant, seg: &Segment) -> Instant {
+    at.checked_sub(Duration::from_millis(seg.silence_ms)).unwrap_or(at)
+}
+
+/// `PAL_RECORD_DIR`: each segment as 16 kHz WAV plus the recognised text, as STT test data.
+fn record(dir: &Path, pcm: &[f32], text: &str) -> std::result::Result<(), Box<dyn std::error::Error>> {
+    std::fs::create_dir_all(dir)?;
+    let name = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis().to_string();
+    let spec = hound::WavSpec {
+        channels: 1,
+        sample_rate: 16_000,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
+    let mut wav = hound::WavWriter::create(dir.join(format!("{name}.wav")), spec)?;
+    for s in pcm {
+        wav.write_sample((s.clamp(-1.0, 1.0) * 32767.0) as i16)?;
+    }
+    wav.finalize()?;
+    std::fs::write(dir.join(format!("{name}.stt.txt")), text)?;
+    Ok(())
 }

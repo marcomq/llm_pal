@@ -1,0 +1,39 @@
+Third-party models used by Pal
+
+Pal downloads these models from their sources on first start. They are not part of the app package. Each is provided
+by its authors "as is", without warranties, as set out in its license. Their authors do not endorse Pal.
+
+
+Parakeet TDT 0.6B v3 (speech recognition)
+  Author:  NVIDIA
+  Source:  https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3
+  License: CC-BY-4.0, https://creativecommons.org/licenses/by/4.0/
+  Changes: int8 ONNX conversion by istupakov, used without further changes,
+           https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx
+
+Pocket TTS (speech synthesis)
+  Author:  Kyutai
+  Source:  https://huggingface.co/kyutai/pocket-tts-without-voice-cloning
+  License: CC-BY-4.0, https://creativecommons.org/licenses/by/4.0/
+  Changes: Pal quantizes the weights to 8 bits when loading them.
+
+Qwen3.5 2B and Qwen3.5 0.8B (language model)
+  Author:  Qwen team, Alibaba Cloud
+  Source:  https://huggingface.co/Qwen/Qwen3.5-2B
+           https://huggingface.co/Qwen/Qwen3.5-0.8B
+  License: Apache-2.0, https://huggingface.co/Qwen/Qwen3.5-2B/blob/main/LICENSE
+  Changes: GGUF quantization by Unsloth, used without further changes,
+           https://huggingface.co/unsloth/Qwen3.5-2B-GGUF
+           https://huggingface.co/unsloth/Qwen3.5-0.8B-GGUF
+
+Smart Turn v3 (end of turn detection)
+  Author:  Pipecat
+  Source:  https://huggingface.co/pipecat-ai/smart-turn-v3
+  License: BSD-2-Clause, https://opensource.org/license/bsd-2-clause
+  Changes: none
+
+Silero VAD (voice activity detection)
+  Copyright (c) 2020-present Silero Team
+  Source:  https://github.com/snakers4/silero-vad
+  License: MIT, https://github.com/snakers4/silero-vad/blob/master/LICENSE
+  Changes: none

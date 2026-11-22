@@ -20,7 +20,7 @@ use crate::{Error, Result};
 /// How often a running reply checks whether its turn was cancelled.
 const CANCEL_POLL: Duration = Duration::from_millis(50);
 const CAPACITY: usize = 1024;
-/// The server's tokens, read by the model stage before they go on to `pal.pieces`.
+/// The server's tokens, read by the model stage before they go on to `pal.speech`.
 pub const SERVER_TOKENS: &str = "pal.llm.tokens";
 pub const SERVER_CANCEL: &str = "pal.llm.cancel";
 

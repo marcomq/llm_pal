@@ -2588,6 +2588,7 @@ name = "pal"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "chrono",
  "cpal",
  "godot",
  "hound",
@@ -2603,6 +2604,7 @@ dependencies = [
  "realfft",
  "rtrb",
  "rubato 5.0.1",
+ "safetensors",
  "serde",
  "serde_json",
  "sha2 0.10.9",
