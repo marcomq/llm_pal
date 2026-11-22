@@ -17,18 +17,32 @@ const BULB_ON := 0.02
 const BULB_AFTERGLOW := 0.18
 const CENTER_ROWS := 8
 const SIDE_ROWS := 6
+## While nothing moves, Godot wakes this often and draws nothing.
+const ACTIVE_FPS := 30
+const IDLE_FPS := 8
+const SETTLED := 0.004
+const TEXT_RED := Color(0.6, 0.15, 0.1)
+## For what is being said right now.
+const TEXT_BRIGHT := Color(1.0, 0.34, 0.24)
+## The user's line is gone this long after its last change, the fade included. The reply fades when Pal is done.
+const SUBTITLE_SECONDS := 5.0
+const SUBTITLE_FADE := 0.5
+## A reply is bright this long after it begins.
+const REPLY_BRIGHT_MS := 1500
 const TEXTS := {
 	"de": {"loading": "lädt Modelle …", "listening": "hört zu", "thinking": "denkt nach", "speaking": "spricht",
 		"stopped": "gestoppt", "error": "Fehler: ", "no_mic": "kein Zugriff aufs Mikrofon",
 		"model_failed": "neues Modell lief nicht, zurück zum alten",
 		"persona_failed": "Persönlichkeit nicht lesbar, nutze KITT: %s",
-		"remove_title": "Altes Modell löschen?", "remove_text": "%s löschen und %s GB freigeben?",
+		"voice_failed": "Stimme nicht lesbar, nutze die Standardstimme: %s",
+		"remove_title": "Unbenutztes Modell löschen?", "remove_text": "%s löschen und %s GB freigeben?",
 		"remove": "Löschen", "keep": "Behalten"},
 	"en": {"loading": "loading models …", "listening": "listening", "thinking": "thinking", "speaking": "speaking",
 		"stopped": "stopped", "error": "Error: ", "no_mic": "no access to the microphone",
 		"model_failed": "the new model didn't run, back to the old one",
 		"persona_failed": "can't read the personality, using KITT: %s",
-		"remove_title": "Delete the old model?", "remove_text": "Delete %s and free %s GB?",
+		"voice_failed": "can't read the voice, using the default one: %s",
+		"remove_title": "Delete the unused model?", "remove_text": "Delete %s and free %s GB?",
 		"remove": "Delete", "keep": "Keep"},
 }
 
@@ -38,6 +52,8 @@ const TEXTS := {
 @onready var language: Label = $Language
 @onready var menu: Label = $Menu
 @onready var party: Label = $Party
+@onready var you: Label = $You
+@onready var reply: Label = $Reply
 
 var _cfg := ConfigFile.new()
 var _settings: Settings
@@ -49,13 +65,18 @@ var _level := 0.0
 var _phase := 0.0
 var _think := 0.0
 var _error := ""
+var _shown_ms := {}
+var _reply_bright_until := 0
 var _center := PackedFloat32Array()
 var _side := PackedFloat32Array()
+var _tags := RegEx.create_from_string("(\\s*\\[[^\\]]*\\])+\\s*$")
 
 
 func _ready() -> void:
 	_center.resize(CENTER_ROWS)
 	_side.resize(SIDE_ROWS)
+	resized.connect(_fit_display)
+	_fit_display()
 	_cfg.load(SETTINGS_PATH)
 	_lang = _cfg.get_value("display", "language", "de")
 	language.text = _lang.to_upper()
@@ -75,8 +96,14 @@ func _ready() -> void:
 		_model_works.call_deferred())
 	pal.heard.connect(func(text: String) -> void:
 		_error = ""
-		print("you: ", text))
-	pal.said.connect(func(sentence: String) -> void: print("pal: ", sentence))
+		print("you: ", text)
+		_subtitle(you, _tags.sub(text, ""))
+		_subtitle(reply, ""))
+	pal.said.connect(func(sentence: String) -> void:
+		print("pal: ", sentence)
+		if reply.text.is_empty():
+			_reply_bright_until = Time.get_ticks_msec() + REPLY_BRIGHT_MS
+		_subtitle(reply, (reply.text + " " + sentence).strip_edges()))
 	pal.turn_done.connect(func(stt_ms: int, ms: int) -> void: print("     text after %d ms, first sentence after %d ms" % [stt_ms, ms]))
 	if OS.get_name() != "Android":
 		_fit_window()
@@ -123,7 +150,7 @@ func _start() -> void:
 	pal.party_mode = _party
 	pal.persona_file = _usable_persona()
 	pal.clear_llm_cache = _take_stale_cache()
-	pal.pocket_voice = Settings.voice(_cfg, _lang, _model_dir())
+	pal.pocket_voice = _usable_voice()
 	var fish: bool = Settings.voice_source(_cfg) == "fish"
 	pal.fish_api_key = _cfg.get_value("fish", "api_key", "") if fish else ""
 	pal.fish_voice_id = _cfg.get_value("fish", "voice_id", "") if fish else ""
@@ -134,6 +161,18 @@ func _start() -> void:
 	pal.llm_api_key = _cfg.get_value("llm", "api_key", "")
 	pal.llm_fallback = _cfg.get_value("llm", "fallback", false)
 	pal.start(_model_dir())
+
+
+## The chosen voice; one of one's own that broke since it was chosen gives way to the first catalog voice.
+func _usable_voice() -> String:
+	var chosen := Settings.voice(_cfg, _lang, _model_dir())
+	if chosen in Settings.VOICES:
+		return chosen
+	var wrong: String = PalNode.voice_error(Settings.voice_path(_model_dir(), _lang, chosen))
+	if wrong.is_empty():
+		return chosen
+	_error = TEXTS[_lang]["voice_failed"] % wrong
+	return Settings.VOICES[0]
 
 
 func _take_stale_cache() -> bool:
@@ -169,6 +208,7 @@ func _back_to_last_model() -> bool:
 	var last: String = _cfg.get_value("llm", "trying_from", "")
 	if last.is_empty():
 		return false
+	_cfg.set_value("llm", "replaced", Settings.local_model(_cfg))
 	_cfg.set_value("llm", "local_model", last)
 	_cfg.set_value("llm", "trying_from", "")
 	_cfg.save(SETTINGS_PATH)
@@ -220,6 +260,8 @@ func _forget_replaced() -> void:
 
 func _process(delta: float) -> void:
 	var state := pal.state()
+	status.text = TEXTS[_lang]["error"] + _error if _error else _state_text(state)
+	_tint_text(state, pal.hearing())
 	var target := clampf(pal.level() * LEVEL_GAIN, 0.0, 1.0)
 	var rate := ATTACK if target > _level else RELEASE
 	_level = lerpf(_level, target, 1.0 - exp(-rate * delta))
@@ -228,8 +270,15 @@ func _process(delta: float) -> void:
 	_phase += delta * 6.0
 	_think = lerpf(_think, 1.0 if thinking else 0.0, 1.0 - exp(-6.0 * delta))
 
+	var fading := _fade_subtitles(state == PalNode.THINKING or state == PalNode.SPEAKING)
+	var moving := thinking or state == PalNode.SPEAKING or target > 0.0 or fading \
+		or maxf(_level, maxf(_think, maxf(_center[0], _side[0]))) > SETTLED
+	var dialog := is_instance_valid(_settings) or is_instance_valid(_removal)
+	Engine.max_fps = ACTIVE_FPS if moving or dialog else IDLE_FPS
+	if not moving:
+		return
+
 	var mat := kitt.material as ShaderMaterial
-	mat.set_shader_parameter("aspect", size.x / maxf(size.y, 1.0))
 	# Thinking and loading light only the middle segment, softly pulsing.
 	var bar := _think * (0.7 + 0.3 * sin(_phase * 0.8))
 	_center = _bulbs(_center, maxf(_level * CENTER_ROWS, bar), delta)
@@ -237,7 +286,56 @@ func _process(delta: float) -> void:
 	mat.set_shader_parameter("center", _center)
 	mat.set_shader_parameter("side", _side)
 	mat.set_shader_parameter("time_s", Time.get_ticks_msec() / 1000.0)
-	status.text = TEXTS[_lang]["error"] + _error if _error else _state_text(state)
+	kitt.queue_redraw()
+
+
+func _fit_display() -> void:
+	(kitt.material as ShaderMaterial).set_shader_parameter("aspect", size.x / maxf(size.y, 1.0))
+	kitt.queue_redraw()
+	_subtitle(you, you.text)
+	_subtitle(reply, reply.text)
+
+
+func _tint_text(state: int, hearing: bool) -> void:
+	_tint(you, state == PalNode.THINKING)
+	_tint(reply, Time.get_ticks_msec() < _reply_bright_until)
+	_tint(status, hearing or state == PalNode.SPEAKING)
+
+
+func _tint(label: Label, bright: bool) -> void:
+	var color := TEXT_BRIGHT if bright else TEXT_RED
+	if label.get_theme_color("font_color") != color:
+		label.add_theme_color_override("font_color", color)
+
+
+## A long text shows its last lines.
+func _subtitle(label: Label, text: String) -> void:
+	if text != label.text:
+		_shown_ms[label] = Time.get_ticks_msec()
+		label.modulate.a = 1.0
+	label.text = text
+	label.lines_skipped = maxi(label.get_line_count() - label.max_lines_visible, 0)
+
+
+## True while fading. `replying` holds the reply: between sentences Pal may be thinking again.
+func _fade_subtitles(replying: bool) -> bool:
+	if replying:
+		_shown_ms[reply] = Time.get_ticks_msec()
+	var you_fading := _fade(you, SUBTITLE_SECONDS)
+	var reply_fading := _fade(reply, SUBTITLE_FADE)
+	return you_fading or reply_fading
+
+
+## Faded text is cleared, so a later sentence doesn't bring it back.
+func _fade(label: Label, seconds: float) -> bool:
+	if label.text.is_empty():
+		return false
+	var age: float = (Time.get_ticks_msec() - _shown_ms.get(label, 0)) / 1000.0
+	var alpha := clampf((seconds - age) / SUBTITLE_FADE, 0.0, 1.0)
+	label.modulate.a = alpha
+	if alpha == 0.0:
+		_subtitle(label, "")
+	return alpha < 1.0
 
 
 ## Rows count from the middle; `lit` rows (fractional) are on. Bulbs warm up quickly and fade slowly.
@@ -303,6 +401,8 @@ func _restart() -> void:
 	if OS.get_name() == "Android" and not OS.get_granted_permissions().has(RECORD_AUDIO):
 		_error = TEXTS[_lang]["no_mic"]
 		return
+	_subtitle(you, "")
+	_subtitle(reply, "")
 	pal.stop()
 	_start()
 

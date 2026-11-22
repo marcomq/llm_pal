@@ -48,6 +48,7 @@ pub struct Persona {
     /// Fixed turns: a line saying every content word of one gets its reply word for word.
     pool: Vec<(String, String)>,
     filler: &'static [&'static str],
+    suggestions: &'static [&'static str],
     history: VecDeque<(String, String)>,
     max_turns: usize,
     language: Language,
@@ -81,6 +82,7 @@ impl Persona {
             quips,
             pool,
             filler: language.profile().filler,
+            suggestions: language.profile().suggestions,
             name: name.to_string(),
             language,
             ..Self::new(c.system.replace(DEFAULT_NAME, name))
@@ -151,6 +153,7 @@ impl Persona {
             quips_given: Vec::new(),
             pool: Vec::new(),
             filler: &[],
+            suggestions: &[],
             history: VecDeque::new(),
             max_turns: 3,
             language: Language::German,
@@ -164,16 +167,59 @@ impl Persona {
         if transcript.split_whitespace().count() > POOL_MAX_WORDS {
             return None;
         }
-        let said = self.content_words(transcript);
-        let (_, reply) = self
+        let clauses = self.clauses(transcript);
+        let denies = clauses.iter().any(|(_, no)| *no);
+        let affirmed: Vec<String> =
+            clauses.iter().filter(|(_, no)| !no).flat_map(|(c, _)| self.content_words(c)).collect();
+        let all = self.content_words(transcript);
+        let (_, _, reply) = self
             .pool
             .iter()
-            .filter(|(u, _)| negated(u) == negated(transcript))
             .filter(|(_, a)| self.history.iter().all(|(_, r)| *r != self.named(a)))
-            .map(|(u, a)| (self.content_words(u), a))
-            .filter(|(words, _)| !words.is_empty() && words.iter().all(|w| said.iter().any(|s| alike(s, w))))
-            .min_by_key(|(words, _)| std::cmp::Reverse(words.len()))?;
+            .map(|(u, a)| (negated(u), self.content_words(u), a))
+            .filter(|(no, _, _)| !no || denies)
+            .filter(|(no, words, _)| {
+                let said = if *no { &all } else { &affirmed };
+                !words.is_empty() && words.iter().all(|w| said.iter().any(|s| alike(s, w)))
+            })
+            .min_by_key(|(_, words, _)| std::cmp::Reverse(words.len()))?;
         Some(self.named(reply))
+    }
+
+    /// The line's sentences, each with whether it denies something. A comma only splits before a suggestion, as in
+    /// "I don't want the fridge empty" the negation reaches past it.
+    fn clauses(&self, text: &str) -> Vec<(String, bool)> {
+        let lower = text.to_lowercase().replace('’', "'");
+        let mut clauses = Vec::new();
+        for sentence in lower.split(['.', '!', '?']) {
+            let mut current = String::new();
+            for part in sentence.split(',') {
+                if let Some(proposed) = self.suggestion(part) {
+                    clauses.push(std::mem::take(&mut current));
+                    clauses.push(proposed.to_string());
+                } else {
+                    current.push_str(part);
+                    current.push(',');
+                }
+            }
+            clauses.push(current);
+        }
+        clauses
+            .into_iter()
+            .filter(|c| !c.is_empty())
+            .map(|c| {
+                let no = negated(&c);
+                (c, no)
+            })
+            .collect()
+    }
+
+    /// What a question proposing something asks, without its opening.
+    fn suggestion<'a>(&self, clause: &'a str) -> Option<&'a str> {
+        let clause = clause.trim_start();
+        self.suggestions
+            .iter()
+            .find_map(|s| clause.strip_prefix(s).filter(|rest| !rest.starts_with(char::is_alphanumeric)))
     }
 
     fn named(&self, text: &str) -> String {
@@ -429,6 +475,23 @@ mod tests {
         let beer = en.pooled("I'm drinking beer today.");
         assert!(beer.as_ref().is_none_or(|r| !r.contains("without beer")), "negation must match: {beer:?}");
         assert!(en.pooled("I'm not drinking beer today.").unwrap().contains("without beer"));
+    }
+
+    #[test]
+    fn a_negation_only_counts_in_its_own_sentence() {
+        let p = Persona::kitt(Language::German, DEFAULT_NAME);
+        let fridge = |line: &str| p.pooled(line).is_some_and(|r| r.contains("Notfall"));
+        assert!(fridge("Der Kühlschrank ist leer. Sollen wir nicht einkaufen fahren?"));
+        assert!(fridge("Der Kühlschrank ist leer, sollen wir nicht einkaufen fahren?"));
+        assert!(fridge("Der Kühlschrank ist leer. Ich habe keine Zeit."), "the other sentence denies");
+        assert!(!fridge("Der Kühlschrank ist nicht leer."));
+        assert!(!fridge("Ich will nicht, dass der Kühlschrank leer ist."), "a comma alone doesn't end the negation");
+        assert!(!fridge("Sollen wir nichts in den leeren Kühlschrank tun?"), "\"nichts\" is no suggestion");
+        assert!(p.pooled("Sollen wir nicht einkaufen fahren?").unwrap().contains("Tüten"));
+        assert_eq!(p.pooled("Ich muss heute nicht einkaufen."), None);
+        let en = Persona::kitt(Language::English, DEFAULT_NAME);
+        assert!(en.pooled("I'm stuck in traffic. Shouldn't we turn around?").is_some());
+        assert!(en.pooled("I'm not drinking beer today. It's late.").unwrap().contains("without beer"));
     }
 
     #[test]

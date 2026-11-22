@@ -256,6 +256,13 @@ impl PalNode {
         Character::from_file(&path, language).err().unwrap_or_default().as_str().into()
     }
 
+    /// What is wrong with a voice file of one's own, empty if it can be used.
+    #[func]
+    fn voice_error(path: GString) -> GString {
+        let path = std::path::PathBuf::from(path.to_string());
+        crate::speak::voice_file::check(&path).err().unwrap_or_default().as_str().into()
+    }
+
     /// The built-in character as a text file to edit.
     #[func]
     fn persona_template(language: GString) -> GString {

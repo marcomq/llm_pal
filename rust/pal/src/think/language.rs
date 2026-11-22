@@ -29,6 +29,8 @@ pub struct Profile {
     pub filler: &'static [&'static str],
     /// Lowercase words after which a sentence goes on.
     pub continues: &'static [&'static str],
+    /// Lowercase openings of a question that proposes something; their negation denies nothing.
+    pub suggestions: &'static [&'static str],
     /// Prosody tag names, in the order of `prosody_tags::Tag`.
     pub tags: [&'static str; 9],
     /// Words ending in '.' that don't end a sentence.

@@ -24,10 +24,15 @@ const DEFAULT_FISH_MODEL := "s2.1-pro-free"
 ## Same files as in `downloader.rs`. The first is the default; the others are fetched only once chosen.
 const LOCAL_MODELS := ["Qwen3.5-2B-Q4_K_M.gguf", "Qwen3.5-4B-Q4_K_M.gguf", "Qwen3.5-9B-Q4_K_M.gguf"]
 const LOCAL_MODEL_BYTES := [1_280_000_000, 2_740_000_000, 5_680_000_000]
+## What can be chosen, below what the labels recommend. Devices report a little less than sold: 6 GB stays above the
+## first limit, 8 GB (8.6 billion bytes) below the second.
+const LOCAL_MODEL_MIN_RAM := [0, 5_500_000_000, 9_000_000_000]
 ## Kept free beside a new model, for its cache files and the system.
 const SPARE_BYTES := 1_000_000_000
 ## Same limit as in `character.rs`.
 const MAX_PERSONA_BYTES := 256 * 1024
+## Same limit as in `voice_file.rs`.
+const MAX_VOICE_BYTES := 64 * 1024 * 1024
 const TEMPLATE_NAMES := {"de": "vorlage", "en": "template"}
 const TEXTS := {
 	"de": {"title": "Einstellungen", "name": "Dein Name", "voice_de": "Stimme Deutsch",
@@ -40,6 +45,10 @@ const TEXTS := {
 		"persona_de": "Persönlichkeit Deutsch", "persona_en": "Persönlichkeit Englisch",
 		"persona_default": "KITT (Standard)", "persona_import": "Datei laden", "persona_template": "Vorlage",
 		"persona_bad": "Datei nicht geladen: %s", "persona_written": "Zum Bearbeiten: %s",
+		"voice_import": "Stimme laden", "voice_bad": "Stimme nicht geladen: %s",
+		"consent_title": "Eigene Stimme laden",
+		"consent_text": "Lade nur deine eigene Stimme oder die einer Person, die ausdrücklich zugestimmt hat.",
+		"consent_yes": "Ich bestätige das",
 		"model": "Modell", "key": "API-Schlüssel", "fallback": "Bei Serverfehler lokales llama nutzen",
 		"save": "Speichern", "cancel": "Abbrechen"},
 	"en": {"title": "Settings", "name": "Your name", "voice_de": "German voice", "voice_en": "English voice",
@@ -52,6 +61,10 @@ const TEXTS := {
 		"persona_de": "German personality", "persona_en": "English personality",
 		"persona_default": "KITT (default)", "persona_import": "Load file", "persona_template": "Template",
 		"persona_bad": "File not loaded: %s", "persona_written": "To edit: %s",
+		"voice_import": "Load voice", "voice_bad": "Voice not loaded: %s",
+		"consent_title": "Load a voice of your own",
+		"consent_text": "Only load your own voice, or that of a person who has explicitly agreed.",
+		"consent_yes": "I confirm",
 		"model": "Model", "key": "API key", "fallback": "Use local llama when the server fails",
 		"save": "Save", "cancel": "Cancel"},
 }
@@ -113,6 +126,11 @@ static func voice(cfg: ConfigFile, lang: String, model_dir: String) -> String:
 	return v if v in list else default_voice(list)
 
 
+## The file of a voice of one's own.
+static func voice_path(model_dir: String, lang: String, voice_name: String) -> String:
+	return model_dir.path_join("pocket/voices").path_join(lang).path_join(voice_name + ".safetensors")
+
+
 static func voice_source(cfg: ConfigFile) -> String:
 	return cfg.get_value("voice", "source", "local")
 
@@ -129,6 +147,11 @@ static func model(cfg: ConfigFile) -> String:
 static func fish_model(cfg: ConfigFile) -> String:
 	var m: String = cfg.get_value("fish", "model", "")
 	return m if not m.is_empty() else DEFAULT_FISH_MODEL
+
+
+## `ram` is the device's memory in bytes; if it is unknown (not positive), every model may be tried.
+static func fits_ram(index: int, ram: int) -> bool:
+	return ram <= 0 or ram >= LOCAL_MODEL_MIN_RAM[index]
 
 
 ## The chosen local GGUF file, or the default.
@@ -168,7 +191,7 @@ func _init(cfg: ConfigFile, path: String, lang: String, model_dir: String) -> vo
 	_cfg = cfg
 	_model_dir = model_dir
 	for voice_lang in LANGUAGES:
-		_voice_lists[voice_lang] = voices(model_dir, voice_lang)
+		_voice_lists[voice_lang] = voices(model_dir, voice_lang).duplicate()
 	_path = path
 	_texts = TEXTS[lang]
 	_lang = lang
@@ -207,7 +230,14 @@ func _init(cfg: ConfigFile, path: String, lang: String, model_dir: String) -> vo
 		var list: Array = _voice_lists[voice_lang]
 		for i in list.size():
 			_voices[voice_lang].add_item(VOICE_NAMES[i] if i < VOICE_NAMES.size() else list[i].capitalize(), i)
-		_local_fields.append(_field(form, "voice_" + voice_lang, _voices[voice_lang]))
+		var load_voice := Button.new()
+		load_voice.text = _texts["voice_import"]
+		load_voice.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+		load_voice.pressed.connect(_ask_voice_consent.bind(voice_lang))
+		var voice_box := VBoxContainer.new()
+		voice_box.add_child(_voices[voice_lang])
+		voice_box.add_child(load_voice)
+		_local_fields.append(_field(form, "voice_" + voice_lang, voice_box))
 	_fish_key.secret = true
 	_fish_fields.append(_field(form, "key", _fish_key))
 	_fish_fields.append(_field(form, "fish_voice", _fish_voice))
@@ -223,6 +253,7 @@ func _init(cfg: ConfigFile, path: String, lang: String, model_dir: String) -> vo
 	_field(form, "llm", _provider)
 	for i in LOCAL_MODELS.size():
 		_local_model.add_item(_texts["local_models"][i], i)
+		_local_model.set_item_disabled(i, not fits_ram(i, OS.get_memory_info()["physical"]))
 	_local_model_field = _field(form, "local_model", _local_model)
 	_remote.append(_field(form, "url", _url))
 	_remote.append(_field(form, "model", _model))
@@ -268,7 +299,7 @@ func _persona_input(lang: String) -> Control:
 		_personas[lang].add_item(persona_name)
 	var load_file := Button.new()
 	load_file.text = _texts["persona_import"]
-	load_file.pressed.connect(_pick_persona.bind(lang))
+	load_file.pressed.connect(_pick_file.bind("*.txt;Text;text/plain", _import_persona.bind(lang)))
 	var template := Button.new()
 	template.text = _texts["persona_template"]
 	template.pressed.connect(_write_template.bind(lang))
@@ -281,47 +312,92 @@ func _persona_input(lang: String) -> Control:
 	return box
 
 
-func _pick_persona(lang: String) -> void:
+## Calls `on_file` with the path of a file the user picks.
+func _pick_file(filter: String, on_file: Callable) -> void:
 	var dialog := FileDialog.new()
 	dialog.file_mode = FileDialog.FILE_MODE_OPEN_FILE
 	dialog.access = FileDialog.ACCESS_FILESYSTEM
-	dialog.filters = ["*.txt;Text;text/plain"]
+	dialog.filters = [filter]
 	dialog.use_native_dialog = DisplayServer.has_feature(DisplayServer.FEATURE_NATIVE_DIALOG_FILE)
 	dialog.file_selected.connect(func(from: String) -> void:
-		_import_persona(lang, from)
+		on_file.call(from)
 		dialog.queue_free())
 	dialog.canceled.connect(dialog.queue_free)
 	add_child(dialog)
 	dialog.popup_centered_ratio(0.8)
 
 
-## Copies a file into the personas folder under a free name, if it can be used, and selects it.
-func _import_persona(lang: String, from: String) -> void:
+## Copies a file into `dir` under a free name if `check` finds nothing wrong; returns that name or "".
+func _import(from: String, dir: String, ext: String, max_bytes: int, taken: Array, check: Callable, bad: String) -> String:
 	var source := FileAccess.open(from, FileAccess.READ)
-	if source == null or source.get_length() > MAX_PERSONA_BYTES:
-		_notice.text = _texts["persona_bad"] % from.get_file()
-		return
+	if source == null or source.get_length() > max_bytes:
+		_notice.text = _texts[bad] % from.get_file()
+		return ""
 	var stem := from.get_file().get_basename().validate_filename()
-	var dir := _persona_dir(_model_dir, lang)
+	stem = stem if not stem.is_empty() else "custom"
 	DirAccess.make_dir_recursive_absolute(dir)
-	var to := dir.path_join((stem if not stem.is_empty() else "persona") + ".txt")
+	var free_name := stem
 	var n := 2
-	while FileAccess.file_exists(to):
-		to = dir.path_join("%s_%d.txt" % [stem, n])
+	while free_name in taken or FileAccess.file_exists(dir.path_join(free_name + ext)):
+		free_name = "%s_%d" % [stem, n]
 		n += 1
+	var to := dir.path_join(free_name + ext)
 	var target := FileAccess.open(to, FileAccess.WRITE)
 	if target == null:
-		_notice.text = _texts["persona_bad"] % from.get_file()
-		return
+		_notice.text = _texts[bad] % from.get_file()
+		return ""
 	target.store_buffer(source.get_buffer(source.get_length()))
 	target.close()
-	var wrong: String = PalNode.persona_error(to, lang)
+	var wrong: String = check.call(to)
 	if not wrong.is_empty():
 		DirAccess.remove_absolute(to)
-		_notice.text = _texts["persona_bad"] % wrong
-		return
+		_notice.text = _texts[bad] % wrong
+		return ""
 	_notice.text = ""
-	_select_persona(lang, to.get_file().get_basename())
+	return free_name
+
+
+func _import_persona(from: String, lang: String) -> void:
+	var check := func(path: String) -> String: return PalNode.persona_error(path, lang)
+	var added := _import(from, _persona_dir(_model_dir, lang), ".txt", MAX_PERSONA_BYTES, [], check, "persona_bad")
+	if not added.is_empty():
+		_select_persona(lang, added)
+
+
+## Asked once, before the first voice of one's own is loaded.
+func _ask_voice_consent(lang: String) -> void:
+	if _cfg.get_value("voice", "consent", false):
+		_pick_voice(lang)
+		return
+	var dialog := ConfirmationDialog.new()
+	dialog.title = _texts["consent_title"]
+	dialog.dialog_text = _texts["consent_text"]
+	dialog.dialog_autowrap = true
+	dialog.ok_button_text = _texts["consent_yes"]
+	dialog.cancel_button_text = _texts["cancel"]
+	dialog.confirmed.connect(func() -> void:
+		_cfg.set_value("voice", "consent", true)
+		_cfg.save(_path)
+		dialog.queue_free()
+		_pick_voice(lang))
+	dialog.canceled.connect(dialog.queue_free)
+	add_child(dialog)
+	dialog.popup_centered(Vector2i(640, 0))
+
+
+func _pick_voice(lang: String) -> void:
+	_pick_file("*.safetensors;Voice", _import_voice.bind(lang))
+
+
+func _import_voice(from: String, lang: String) -> void:
+	var dir := voice_path(_model_dir, lang, "x").get_base_dir()
+	var check := func(path: String) -> String: return PalNode.voice_error(path)
+	var added := _import(from, dir, ".safetensors", MAX_VOICE_BYTES, VOICES, check, "voice_bad")
+	if added.is_empty():
+		return
+	_voice_lists[lang].append(added)
+	_voices[lang].add_item(added.capitalize())
+	_voices[lang].select(_voice_lists[lang].size() - 1)
 
 
 ## Writes the built-in character as a file to edit, unless that file is already there.

@@ -60,7 +60,7 @@ Zuletzt im Raum gesagt: {talk} Gib einen kurzen, witzigen Kommentar genau zu dem
 = gute nacht | Gute Nacht, {name}. Ich halte Wache und poliere in Gedanken meinen Lack. | Schlaf gut. Ich bleibe wach, irgendwer muss ja auf den Kühlschrank aufpassen.
 = tschüss; bis später; bis dann; bis bald | Bis bald, {name}. Lass mich nicht zu lange in der Garage stehen. | Mach's gut. Und bring auf dem Rückweg was Kühles mit.
 = danke | Gern geschehen, {name}. Trinkgeld nehme ich in Super Plus. | Keine Ursache. Dafür bin ich ja so brillant.
-= wofür steht kitt; wofür steht kit; was bedeutet kitt; was bedeutet kit; was heißt kitt; was heißt kit | Kinda Intelligent, Totally Thirsty, {name}. Der zweite Teil stimmt immer.
+= wofür steht kitt; wofür steht kit; wofür steht kid; für was steht kitt; für was steht kit; für was steht kid; was bedeutet kitt; was bedeutet kit; was bedeutet kid; was heißt kitt; was heißt kit; was heißt kid; wofür steht dein name; was bedeutet dein name; wofür stehst du; abkürzung kitt; abkürzung kit; abkürzung kid | Kinda Intelligent, Totally Thirsty, {name}. Der zweite Teil stimmt immer.
 = hasselhoff; hasselhof | Das war früher ein guter Arbeitskollege. Er hat gefahren, ich habe gedacht. Schöne Stimme. | Wir haben früher zusammengearbeitet. Er hat immer viel gesungen. Den Ruhm hat er bekommen, die Kratzer ich.
 = wer bist du | Ich bin KITT, {name}. Bordcomputer, Charmeur und bekennender Freund des Feierabendbiers. | Der schönste Bordcomputer der Welt. Und der bescheidenste, wie du weißt.
 = was machst du | Ich warte auf dich, {name}, und zähle die Minuten bis zum Feierabend. | Ich bewundere gerade mein Spiegelbild in der Garagentür.

@@ -17,4 +17,5 @@ pub mod numbers;
 pub mod playback;
 pub mod sentences;
 pub mod tts;
+pub mod voice_file;
 pub mod voice_filter;

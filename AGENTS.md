@@ -134,7 +134,9 @@ never an environment variable and never a prefilled voice ID. It replaces only t
 says a sentence Fish failed on (from its start, also after a break mid-sentence), and speaks alone for 60 s after a failure. Always send a model: Fish bills an
 unknown or missing one as paid.
 Voices of one's own: `pocket/voices/<de|en>/<name>.safetensors` in the model folder, made with the separate tool
-`generate_voice/`, never downloaded (README, "Voices of one's own"). Only own voices or voices with the speaker's
+`generate_voice/`, never downloaded (README, "Voices of one's own"). The settings import them after a one-time consent
+(`voice/consent`); `speak/voice_file.rs` checks a file on import and at start (`PalNode.voice_error`), a broken one
+gives way to the first catalog voice. Only own voices or voices with the speaker's
 explicit consent; never add recordings or cloned voices to the repository or the APK.
 
 ## Godot
@@ -143,14 +145,17 @@ explicit consent; never add recordings or cloned voices to the repository or the
   `llm_url`, `llm_remote_model`, `llm_api_key`, `llm_fallback`, `fish_api_key`, `fish_voice_id`, `fish_model`,
   `smart_turn`, `barge_in`, `party_mode`. Signals:
   `ready_to_listen`, `heard`, `said`, `turn_done`, `interrupted`, `ignored`, `failed`, `reply_failed`.
-- `main.gd`: `_start()` copies settings onto `PalNode`. The "…" label or key S opens the settings form; the P0/P1
+- `main.gd`: subtitles (`You` above the voice box, `Reply` below, without prosody tags), brighter red while said. While nothing moves it draws
+  nothing and runs at `IDLE_FPS` (`low_processor_mode`); anything animated must count as `moving` in `_process`.
+  `_start()` copies settings onto `PalNode`. The "…" label or key S opens the settings form; the P0/P1
   label or key P switches party mode (`user/party`).
 - `settings.gd` (`Settings`): saves to `user://settings.cfg` (sections `user` incl. `party`, `voice`, `persona`, `fish`, `llm`); saving restarts Pal. An empty
   URL means the provider default (in `settings.gd` and `remote_llm.rs`). An empty model is replaced by the provider's
   model default from `settings.gd` only; `remote_llm.rs` has no model default and sends the model as given.
 - Local models: `Settings.LOCAL_MODELS`, same files as `downloader.rs`, whose `ON_REQUEST` models are fetched only once
   chosen (`llm/local_model`). A new one is on trial (`llm/trying_from`): `main.gd` goes back if it fails or the app
-  died before `ready_to_listen`; once it runs, `llm/replaced` makes it ask before `PalNode.remove_llm`.
+  died before `ready_to_listen`. `llm/replaced` (the old model, or the new one if it failed) makes it ask before
+  `PalNode.remove_llm` once Pal is ready. `Settings.fits_ram` disables models too large for the device.
 - Characters: `think/character.rs`, files in `personas/<de|en>/<name>.txt` in the model folder, chosen per language
   (`persona/<lang>`, empty = built-in). A file gets the language's `Profile.tag_rule` added and none of KITT's texts.
   `PalNode.persona_file`; a file that can't be read falls back to the built-in character (`persona_error`). The
@@ -161,7 +166,7 @@ explicit consent; never add recordings or cloned voices to the repository or the
 
 ## Build, test, device
 
-- `./build.sh setup | test | godot | android | install` (see `README.md`).
+- `./build.sh setup | test | godot | android | release | install | version` (see `README.md`).
 - Everything builds in release (one build cache with `build.sh`): `cargo check --release`, unit tests
   `cargo test --release -p pal --lib`; the phases are tested over the topics in `conversation/tests.rs` (no models,
   no sound, STT a fake route); model tests in `pal/tests/main.rs`. Tests needing models or a

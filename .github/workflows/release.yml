@@ -1,0 +1,94 @@
+name: Release APK
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  GODOT_VERSION: 4.7.2
+  NDK_VERSION: 29.0.14206865
+
+jobs:
+  android:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Version
+        id: version
+        run: |
+          name=$(./build.sh version)
+          if [ "${GITHUB_REF_TYPE}" = tag ] && [ "${GITHUB_REF_NAME}" != "v$name" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} does not match version $name in rust/Cargo.toml"; exit 1
+          fi
+          [ "${GITHUB_REF_TYPE}" = tag ] || name="$name-${GITHUB_SHA::7}"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-ndk
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+
+      - name: Android NDK
+        run: |
+          yes | "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" "ndk;$NDK_VERSION" > /dev/null
+          echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/$NDK_VERSION" >> "$GITHUB_ENV"
+
+      - name: Godot and export templates
+        run: |
+          base="https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable"
+          curl -fsSL -o godot.zip "$base/Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip"
+          curl -fsSL -o templates.tpz "$base/Godot_v${GODOT_VERSION}-stable_export_templates.tpz"
+          unzip -q godot.zip -d "$RUNNER_TEMP/godot"
+          echo "GODOT=$RUNNER_TEMP/godot/Godot_v${GODOT_VERSION}-stable_linux.x86_64" >> "$GITHUB_ENV"
+          tdir="$HOME/.local/share/godot/export_templates/${GODOT_VERSION}.stable"
+          mkdir -p "$tdir" && unzip -q templates.tpz -d "$RUNNER_TEMP/tpl" && mv "$RUNNER_TEMP"/tpl/templates/* "$tdir/"
+          mkdir -p "$HOME/.config/godot"
+          cat > "$HOME/.config/godot/editor_settings-${GODOT_VERSION%.*}.tres" <<EOF
+          [gd_resource type="EditorSettings" format=3]
+
+          [resource]
+          export/android/android_sdk_path = "$ANDROID_SDK_ROOT"
+          export/android/java_sdk_path = "$JAVA_HOME_21_X64"
+          EOF
+
+      - name: Keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          [ -n "$KEYSTORE_BASE64" ] || { echo "::error::secret ANDROID_KEYSTORE_BASE64 is not set"; exit 1; }
+          echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.keystore"
+          echo "GODOT_ANDROID_KEYSTORE_RELEASE_PATH=$RUNNER_TEMP/release.keystore" >> "$GITHUB_ENV"
+
+      - name: Build
+        env:
+          GODOT_ANDROID_KEYSTORE_RELEASE_USER: ${{ secrets.ANDROID_KEYSTORE_ALIAS }}
+          GODOT_ANDROID_KEYSTORE_RELEASE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+        run: |
+          ./build.sh release
+          mv build/llm_pal.apk "build/llm_pal-${{ steps.version.outputs.name }}.apk"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: llm_pal-${{ steps.version.outputs.name }}
+          path: build/llm_pal-*.apk
+
+      - name: GitHub release
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            build/llm_pal-*.apk
+            LICENSE-MIT
+            LICENSE-APACHE
+            godot/THIRD_PARTY_NOTICES.txt
+            rust/pal-tts/LICENSE-KYUTAI

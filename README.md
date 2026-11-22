@@ -35,7 +35,12 @@ scripts/         make-test-audio.sh (macOS `say`), make-hal-panel.py
 ./build.sh test          # all tests, including the ones that need the models
 ./build.sh godot         # Pal with the Godot display (models from models/ or $PAL_MODELS; $PAL_LLM picks the GGUF)
 ./build.sh install       # build the arm64 Android APK and install it with adb
+./build.sh release       # signed release APK (keystore from GODOT_ANDROID_KEYSTORE_RELEASE_*)
 ```
+
+A tag `v<version>` matching the version in `rust/Cargo.toml` makes the CI build the signed APK and publish a GitHub
+release. It needs the repository secrets `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_ALIAS` and
+`ANDROID_KEYSTORE_PASSWORD`.
 
 Pal downloads missing models into its model folder on start, on the Mac and on Android alike (about 2 GB the first
 time).
@@ -45,8 +50,8 @@ The UI starts in German; English is one tap away.
 ## Larger models
 
 The settings offer Qwen3.5 2B (default), 4B (2.7 GB, 8 GB RAM or more) and 9B (5.7 GB, 12 GB RAM or more). A larger
-model is downloaded only after you choose and save it. If it doesn't start, Pal goes back to the previous one. Once it
-runs, Pal asks whether to delete the old model.
+model is downloaded only after you choose and save it, and models too large for the device's RAM can't be chosen. If
+one doesn't start, Pal goes back to the previous one. Either way, Pal then asks whether to delete the unused model.
 
 ## Personalities
 
@@ -91,8 +96,9 @@ Besides the built-in voices (e.g. `juergen`), Pal loads voices of one's own from
 <models folder>/pocket/voices/<de|en>/<name>.safetensors
 ```
 
-They are never downloaded; `./build.sh install` copies them to the phone once Pal has started there (it makes the
-folder). The voice then shows up in the settings (key S or "…"). Such a file is made from a 10–30 s recording with the separate tool in `generate_voice/` (Pocket TTS's
+They are never downloaded. To add one, press **Load voice** in the settings (key S or "…") and pick a `.safetensors`
+file; Pal asks for your confirmation the first time and refuses files that are not a Pocket TTS voice. Alternatively,
+`./build.sh install` copies them to the phone once Pal has started there (it makes the folder). Such a file is made from a 10–30 s recording with the separate tool in `generate_voice/` (Pocket TTS's
 voice cloning model, see its README).
 
 **Only clone your own voice or the voice of a person who has expressly agreed.** Never use someone else's voice

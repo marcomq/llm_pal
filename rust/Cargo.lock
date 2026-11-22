@@ -2604,6 +2604,7 @@ dependencies = [
  "realfft",
  "rtrb",
  "rubato 5.0.1",
+ "safetensors",
  "serde",
  "serde_json",
  "sha2 0.10.9",
