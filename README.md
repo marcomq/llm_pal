@@ -12,7 +12,7 @@ the device: no cloud and no account. Only the optional servers you set up yourse
 > vain, thirsty and unreliable. It is not affiliated with or endorsed by the rights holders of the original series, and
 > it does not use its footage, music, logos or voices.
 
-Microphone → 16 kHz mono → Silero VAD → Smart Turn (end of turn) → speech segments and prosody → Parakeet TDT (STT, via mq-bridge-onnx) → Qwen3.5 2B (llama.cpp) →
+Microphone → 16 kHz mono → Silero VAD → Smart Turn (end of turn) → speech segments and prosody → Parakeet TDT (STT, via mq-bridge-onnx) → SmolLM3 3B (llama.cpp) →
 sentence streaming → Kyutai Pocket TTS.
 
 ```
@@ -45,19 +45,20 @@ release. It needs the repository secrets `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEY
 Pal downloads missing models into its model folder on start, on the Mac and on Android alike (about 2 GB the first
 time).
 
-The UI starts in German; English is one tap away.
+The UI starts in English; German is one tap away.
 
-## Larger models
+## Local model
 
-The settings offer Qwen3.5 2B (default), 4B (2.7 GB, 8 GB RAM or more) and 9B (5.7 GB, 12 GB RAM or more). A larger
-model is downloaded only after you choose and save it, and models too large for the device's RAM can't be chosen. If
-one doesn't start, Pal goes back to the previous one. Either way, Pal then asks whether to delete the unused model.
+The settings offer SmolLM3 3B (default, 1.9 GB), Gemma 4 E2B (3.1 GB) and Granite 4.0 H 1B (0.9 GB, best in English). A
+model other than the default is downloaded only after you choose and save it. After an update from an earlier version, Pal asks whether to delete the
+model it used before.
 
 ## Personalities
 
-Each language has its own personality, chosen in the settings. The built-in character is always first in the list, so
-you can always go back to it. **Template** writes it as a text file to edit, **Load file** adds your own. Files live in
-`personas/<de|en>/<name>.txt` in the model folder. A language without a file keeps the built-in character.
+One personality is chosen in the settings for both languages. The built-in character is always first in the list, so
+you can always go back to it. **Template** writes it as a text file to edit, one per language; **Load file** adds your
+own to the language currently active. Files live in `personas/<de|en>/<name>.txt` in the model folder, with the same
+name in both languages. If the active language has no such file or it can't be read, KITT takes over.
 
 Only `[system]` is required. Without `[call words]`, the words of the file name call the character. Without
 `[joke words]` or `[silence]`, the language's defaults apply. Other sections you leave out stay empty. Each call word
@@ -98,6 +99,9 @@ Besides the built-in voices (e.g. `juergen`), Pal loads voices of one's own from
 <models folder>/pocket/voices/<de|en>/<name>.safetensors
 ```
 
+The settings offer one voice for both languages. A voice of one's own needs a file of the same name per language;
+in a language without one, Pal uses the default voice. **Load voice** adds the file to the language currently active.
+
 They are never downloaded. To add one, press **Load voice** in the settings (key S or "…") and pick a `.safetensors`
 file; Pal asks for your confirmation the first time and refuses files that are not a Pocket TTS voice. Alternatively,
 `./build.sh install` copies them to the phone once Pal has started there (it makes the folder). Such a file is made from a 10–30 s recording with the separate tool in `generate_voice/` (Pocket TTS's
@@ -111,7 +115,7 @@ their personality rights. A consenting speaker does not make a sound-alike safe:
 voice or a protected character can still infringe their rights. Don't pass on recordings or voices (no repository, APK or download; `models/` is git-ignored), and don't use a cloned voice so
 that others take it for the real person. This is not legal advice; when in doubt, use only your own voice.
 
-License: MIT OR Apache-2.0. Silero VAD: MIT. Smart Turn: BSD-2-Clause. Parakeet TDT: CC-BY-4.0 (see below). Qwen3.5: Apache-2.0. Pocket TTS code: MIT (check the Kyutai model card for the weights). No GPL.
+License: MIT OR Apache-2.0. Silero VAD: MIT. Smart Turn: BSD-2-Clause. Parakeet TDT: CC-BY-4.0 (see below). SmolLM3, Gemma 4 and Granite 4.0: Apache-2.0. Pocket TTS code: MIT (check the Kyutai model card for the weights). No GPL.
 
 Speech recognition uses [Parakeet TDT 0.6B v3](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3) by NVIDIA, licensed
 under [CC-BY-4.0](https://creativecommons.org/licenses/by/4.0/). Pal uses the int8 ONNX conversion by istupakov

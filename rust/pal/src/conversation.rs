@@ -29,12 +29,12 @@ mod unfinished;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use std::time::Duration;
 use std::time::Instant;
 
 use mq_bridge::blocking_handler::HandlerContext;
-use mq_bridge::{CanonicalMessage, Handled};
+use mq_bridge::{CanonicalMessage, Handled, Publisher};
 use tokio::runtime::Handle;
 
 use crate::downloader;
@@ -80,6 +80,7 @@ impl Conversation {
             }
             (Phase::Prefilling { since, live_by: Some(by) }, _) => self.ready(since, Some(by)),
             (Phase::Prefilling { since, live_by }, _) => Phase::Prefilling { since, live_by },
+            (phase, Some(Input::Typed(text))) => self.typed(phase, text),
             (Phase::Listening, input) => self.listening(input),
             // New speech, or after a forced split the rest of the same speech, which comes without a `SpeechStart`.
             (
@@ -271,12 +272,15 @@ fn run(cfg: AgentConfig, shared: Arc<Shared>, events: Sender<AgentEvent>) -> Res
     // Kept to cut the voice off at the end; the conversation reaches it through `pal.speech`.
     let voice = parts.speaker.clone();
     let (ended_tx, ended) = channel();
+    let typing = shared.clone();
     transport::deploy(rt.handle(), parts, move |transport| {
         transport.prefill(&persona.context())?;
         let conversation = Conversation::new(cfg, shared, events, transport, mic, persona, loading_since);
         Ok(conversation_handler(conversation, voice, ended_tx))
     })?;
+    *typing.typed_lines() = Some(transport::inbox_publisher(rt.handle())?);
     let _ = ended.recv();
+    *typing.typed_lines() = None;
     transport::stop_inbox(rt.handle());
     Ok(())
 }
@@ -299,7 +303,7 @@ fn load(cfg: &AgentConfig, shared: &Shared, persona: &Persona, rt: &Handle) -> R
         pocket_files.clone(),
         if local { vec![cfg.llm_model.clone()] } else { vec![] },
     ];
-    downloader::ensure(dir, &files.concat(), &shared.quit)?;
+    downloader::ensure(dir, &files.concat(), &shared.quit, &shared.download)?;
     tts::use_local_files(dir);
 
     let t0 = Instant::now();
@@ -437,11 +441,18 @@ struct Shared {
     quit: AtomicBool,
     output: OnceLock<Arc<PlaybackState>>,
     mic: OnceLock<Arc<MicLink>>,
+    download: downloader::Progress,
+    /// The way into `[pal.inbox]` for typed lines, while the routes run.
+    typed: Mutex<Option<Publisher>>,
 }
 
 impl Shared {
     fn set(&self, s: State) {
         self.state.store(s as u8, Ordering::Relaxed);
+    }
+
+    fn typed_lines(&self) -> std::sync::MutexGuard<'_, Option<Publisher>> {
+        self.typed.lock().unwrap_or_else(PoisonError::into_inner)
     }
 }
 
@@ -466,6 +477,21 @@ impl Agent {
             sh.set(State::Stopped);
         });
         Self { shared, events, worker }
+    }
+
+    /// Bytes downloaded so far and in all; both 0 without a running download.
+    pub fn download(&self) -> (u64, u64) {
+        let progress = &self.shared.download;
+        (progress.done.load(Ordering::Relaxed), progress.total.load(Ordering::Relaxed))
+    }
+
+    /// Answers `text` as if the user had said it; dropped until Pal listens.
+    pub fn type_line(&self, text: &str) {
+        if let Some(inbox) = self.shared.typed_lines().as_ref()
+            && let Err(e) = inbox.blocking_send(Input::typed(text))
+        {
+            eprintln!("llm_pal: typed line: {e}");
+        }
     }
 
     /// Asks the agent thread to quit; `is_finished` tells when it has released microphone and models.

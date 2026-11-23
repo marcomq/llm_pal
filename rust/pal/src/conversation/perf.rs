@@ -21,7 +21,7 @@ use crate::hear::event::Features;
 use crate::speak::handlers;
 use crate::think::brain::{self, Model};
 use crate::think::persona::DEFAULT_NAME;
-use crate::transport::{End, LLM_IN, LlmRequest, Report, SPEECH, ToSpeaker, Token, emitter};
+use crate::transport::{End, LLM_IN, LlmRequest, Report, SPEECH, ToSpeaker, Token};
 
 const ROUTES: [&str; 3] = ["perf_conversation", "perf_llm", "perf_voice"];
 const LANG: Language = Language::German;
@@ -71,7 +71,8 @@ impl Pal {
             }
             llm.handle(msg, ctx)
         };
-        let llm = ThreadedHandler::with_emitter(llm, rt.block_on(emitter(SPEECH)).unwrap());
+        let to_speech = rt.block_on(transport::publisher(SPEECH)).unwrap();
+        let llm = ThreadedHandler::builder(llm).emit_to("tokens", to_speech).build();
         let (speech_tx, speech) = channel();
         let mut split = handlers::Split::new(LANG);
         let voice = ThreadedHandler::new(move |msg: CanonicalMessage, _: &HandlerContext| {
@@ -340,7 +341,7 @@ fn tts_times(tts: &pal_tts::PocketTts, text: &str) -> Duration {
 }
 
 /// The real chain as the app runs it (smart turn on): the microphone's events from a recording, Parakeet, the
-/// persona's fixed replies or Qwen, and the sentence split over the topics, each reply cut off after its first
+/// persona's fixed replies or the model, and the sentence split over the topics, each reply cut off after its first
 /// sentence; then Pocket TTS for that sentence. Only the playback is left out.
 #[test]
 #[ignore = "needs models/ and testdata/"]
@@ -348,7 +349,7 @@ fn time_to_the_first_answer_with_the_models() {
     let filter = tracing_subscriber::EnvFilter::from_default_env();
     let _ = tracing_subscriber::fmt().with_env_filter(filter).with_writer(std::io::stderr).try_init();
     let persona = Persona::kitt(LANG, DEFAULT_NAME);
-    let (model, _thread) = Model::start(&models().join("Qwen3.5-2B-Q4_K_M.gguf"), persona.fixed_messages()).unwrap();
+    let (model, _thread) = Model::start(&models().join("SmolLM3-Q4_K_M.gguf"), persona.fixed_messages()).unwrap();
     model.prefill(persona.context(), None).unwrap();
     let stt = |rt: &Runtime| transport::start_stt(rt.handle(), &models().join("parakeet-tdt-0.6b-v3")).unwrap();
     let pal = Pal::start(stt, |report| brain::handler(Some(model), None, report), models());

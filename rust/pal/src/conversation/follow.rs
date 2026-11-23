@@ -44,7 +44,7 @@ impl Conversation {
                 self.send(AgentEvent::ReplyFailed(error));
                 return self.drop_turn(t);
             }
-            Input::Spoken(_) => {}
+            Input::Spoken(_) | Input::Typed(_) => {}
             // The user goes on after an unfinished sentence: the held reply was too early.
             Input::Event(event @ Event::SpeechStart { .. }) if t.ending.is_some() => {
                 let (_, end) = t.ending.take().expect("the guard checked it");

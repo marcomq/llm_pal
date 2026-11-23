@@ -3,7 +3,7 @@
 use std::time::Instant;
 
 use mq_bridge::blocking_handler::{BlockingHandler, HandlerContext};
-use mq_bridge::{CanonicalMessage, Handled};
+use mq_bridge::{CanonicalMessage, Handled, HandlerError};
 
 use crate::speak::sentences::Sentences;
 use crate::speak::tts::PocketSpeaker;
@@ -50,62 +50,96 @@ struct Held {
     done: bool,
 }
 
-pub fn speak(mut speaker: PocketSpeaker, language: Language, report: Report) -> impl BlockingHandler {
-    let mut split = Split::new(language);
-    let mut held: Option<Held> = None;
-    // The speech thread is gone: nothing is said or done any more, each sentence reports `Failed`.
-    let mut broken = false;
-    move |msg: CanonicalMessage, ctx: &HandlerContext| {
+/// The `pal_speak` handler.
+pub fn speak(speaker: PocketSpeaker, language: Language, report: Report) -> impl BlockingHandler {
+    let mut state = Speak { speaker, language, split: Split::new(language), held: None, broken: false, report };
+    move |msg: CanonicalMessage, ctx: &HandlerContext| state.on_speech(msg, ctx)
+}
+
+struct Speak {
+    speaker: PocketSpeaker,
+    language: Language,
+    split: Split,
+    held: Option<Held>,
+    /// The speech thread is gone: nothing is said or done any more, each sentence reports `Failed`.
+    broken: bool,
+    report: Report,
+}
+
+impl Speak {
+    /// Runs for each message on `pal.speech`: a token to say, or a control message for the voice.
+    fn on_speech(&mut self, msg: CanonicalMessage, ctx: &HandlerContext) -> Result<Handled, HandlerError> {
         trace_received("pal_speak", &msg);
         let Some((turn, what)) = ToSpeaker::from_message(&msg) else {
             return Ok(Handled::Ack);
         };
-        let turn = turn.as_str();
-        // `Said` goes first: the playback's `Quiet` for this sentence must reach the inbox after it.
-        let mut say = |text: String| {
-            let spoken = pronounced(&text, language);
-            report(Spoken::Said { turn: turn.to_string(), text, at: Instant::now() });
-            if let Err(e) = speaker.say(turn, &spoken) {
-                broken = true;
-                report(Spoken::Failed { turn: turn.to_string(), error: e.to_string() });
-            }
-        };
-        let holding = held.as_ref().is_some_and(|h| h.turn == turn);
         match what {
-            ToSpeaker::Hold => held = Some(Held { turn: turn.to_string(), sentences: Vec::new(), done: false }),
-            ToSpeaker::Release if holding => {
-                let h = held.take().expect("holding");
-                h.sentences.into_iter().for_each(&mut say);
-                if h.done && !broken {
-                    report(Spoken::Done { turn: h.turn });
-                }
-            }
-            ToSpeaker::Discard if holding => held = None,
-            ToSpeaker::Release | ToSpeaker::Discard => {}
-            ToSpeaker::Stop => speaker.stop(),
-            ToSpeaker::Pause => speaker.pause(),
-            ToSpeaker::Resume => speaker.resume(),
-            ToSpeaker::Piece(token) => {
-                let sentences = split.sentences(&token, &report);
-                if !ctx.is_cancelled() {
-                    match held.as_mut().filter(|h| h.turn == turn) {
-                        Some(h) => h.sentences.extend(sentences),
-                        None => sentences.into_iter().for_each(&mut say),
-                    }
-                }
-                match token.end {
-                    Some(End::Complete) if holding => held.as_mut().expect("holding").done = true,
-                    Some(End::Complete) if !broken => report(Spoken::Done { turn: turn.to_string() }),
-                    Some(End::Failed) => {
-                        if holding {
-                            held = None;
-                        }
-                        report(Spoken::Failed { turn: turn.to_string(), error: token.text });
-                    }
-                    _ => {}
+            ToSpeaker::Hold => self.held = Some(Held { turn, sentences: Vec::new(), done: false }),
+            ToSpeaker::Release => self.release(&turn),
+            ToSpeaker::Discard => self.discard(&turn),
+            ToSpeaker::Stop => self.speaker.stop(),
+            ToSpeaker::Pause => self.speaker.pause(),
+            ToSpeaker::Resume => self.speaker.resume(),
+            ToSpeaker::Piece(token) => self.piece(&turn, token, ctx),
+        }
+        Ok(Handled::Ack)
+    }
+
+    fn holding(&self, turn: &str) -> bool {
+        self.held.as_ref().is_some_and(|h| h.turn == turn)
+    }
+
+    fn release(&mut self, turn: &str) {
+        if !self.holding(turn) {
+            return;
+        }
+        let held = self.held.take().expect("holding");
+        for sentence in held.sentences {
+            self.say(turn, sentence);
+        }
+        if held.done && !self.broken {
+            (self.report)(Spoken::Done { turn: held.turn });
+        }
+    }
+
+    fn discard(&mut self, turn: &str) {
+        if self.holding(turn) {
+            self.held = None;
+        }
+    }
+
+    fn piece(&mut self, turn: &str, token: Token, ctx: &HandlerContext) {
+        let holding = self.holding(turn);
+        let sentences = self.split.sentences(&token, &self.report);
+        if !ctx.is_cancelled() {
+            if holding {
+                self.held.as_mut().expect("holding").sentences.extend(sentences);
+            } else {
+                for sentence in sentences {
+                    self.say(turn, sentence);
                 }
             }
         }
-        Ok(Handled::Ack)
+        match token.end {
+            Some(End::Complete) if holding => self.held.as_mut().expect("holding").done = true,
+            Some(End::Complete) if !self.broken => (self.report)(Spoken::Done { turn: turn.to_string() }),
+            Some(End::Failed) => {
+                if holding {
+                    self.held = None;
+                }
+                (self.report)(Spoken::Failed { turn: turn.to_string(), error: token.text });
+            }
+            _ => {}
+        }
+    }
+
+    /// `Said` goes first: the playback's `Quiet` for this sentence must reach the inbox after it.
+    fn say(&mut self, turn: &str, text: String) {
+        let spoken = pronounced(&text, self.language);
+        (self.report)(Spoken::Said { turn: turn.to_string(), text, at: Instant::now() });
+        if let Err(e) = self.speaker.say(turn, &spoken) {
+            self.broken = true;
+            (self.report)(Spoken::Failed { turn: turn.to_string(), error: e.to_string() });
+        }
     }
 }

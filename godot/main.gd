@@ -3,6 +3,7 @@ extends Control
 ## switches the language and restarts Pal.
 ## P or a tap on P0/P1 top left switches party mode (Pal answers only "KITT", jokes and silence) and restarts Pal.
 ## A tap on … (or S) opens the settings; saving them restarts Pal.
+## A tap on T (or T) opens a field to type a line instead of saying it.
 
 const SETTINGS_PATH := "user://settings.cfg"
 const RECORD_AUDIO := "android.permission.RECORD_AUDIO"
@@ -30,20 +31,24 @@ const SUBTITLE_FADE := 0.5
 ## A reply is bright this long after it begins.
 const REPLY_BRIGHT_MS := 1500
 const TEXTS := {
-	"de": {"loading": "lädt Modelle …", "listening": "hört zu", "thinking": "denkt nach", "speaking": "spricht",
+	"de": {"loading": "lädt Modelle …", "downloading": "lädt Modelle: %d %% (%s von %s GB)",
+		"downloading_size": "lädt Modelle: %s GB", "listening": "hört zu", "thinking": "denkt nach", "speaking": "spricht",
 		"stopped": "gestoppt", "error": "Fehler: ", "no_mic": "kein Zugriff aufs Mikrofon",
 		"model_failed": "neues Modell lief nicht, zurück zum alten",
 		"persona_failed": "Persönlichkeit nicht lesbar, nutze KITT: %s",
 		"voice_failed": "Stimme nicht lesbar, nutze die Standardstimme: %s",
 		"remove_title": "Unbenutztes Modell löschen?", "remove_text": "%s löschen und %s GB freigeben?",
-		"remove": "Löschen", "keep": "Behalten", "remove_failed": "%s konnte nicht gelöscht werden"},
-	"en": {"loading": "loading models …", "listening": "listening", "thinking": "thinking", "speaking": "speaking",
+		"remove": "Löschen", "keep": "Behalten", "remove_failed": "%s konnte nicht gelöscht werden",
+		"type": "Text eingeben, Enter sendet"},
+	"en": {"loading": "loading models …", "downloading": "downloading models: %d%% (%s of %s GB)",
+		"downloading_size": "downloading models: %s GB", "listening": "listening", "thinking": "thinking", "speaking": "speaking",
 		"stopped": "stopped", "error": "Error: ", "no_mic": "no access to the microphone",
 		"model_failed": "the new model didn't run, back to the old one",
 		"persona_failed": "can't read the personality, using KITT: %s",
 		"voice_failed": "can't read the voice, using the default one: %s",
 		"remove_title": "Delete the unused model?", "remove_text": "Delete %s and free %s GB?",
-		"remove": "Delete", "keep": "Keep", "remove_failed": "couldn't delete %s"},
+		"remove": "Delete", "keep": "Keep", "remove_failed": "couldn't delete %s",
+		"type": "Type a line, Enter sends"},
 }
 
 @onready var pal: PalNode = $Pal
@@ -54,13 +59,15 @@ const TEXTS := {
 @onready var party: Label = $Party
 @onready var you: Label = $You
 @onready var reply: Label = $Reply
+@onready var type_button: Label = $TypeButton
+@onready var typed: LineEdit = $Typed
 
 var _cfg := ConfigFile.new()
 var _settings: Settings
 var _removal: ConfirmationDialog
 var _start_note := ""
 var _party := false
-var _lang := "de"
+var _lang := "en"
 var _level := 0.0
 var _phase := 0.0
 var _think := 0.0
@@ -78,10 +85,12 @@ func _ready() -> void:
 	resized.connect(_fit_display)
 	_fit_display()
 	_cfg.load(SETTINGS_PATH)
-	_lang = _cfg.get_value("display", "language", "de")
+	_lang = _cfg.get_value("display", "language", "en")
 	language.text = _lang.to_upper()
 	_party = _cfg.get_value("user", "party", false)
 	_show_party()
+	typed.text_submitted.connect(_send_typed)
+	_retire_old_model()
 	# Still on trial at launch: the last run never got ready with it, e.g. killed for lack of memory.
 	_back_to_last_model()
 	pal.failed.connect(func(msg: String) -> void:
@@ -204,6 +213,24 @@ func _model_dir() -> String:
 	return ProjectSettings.globalize_path("res://").path_join("../models").simplify_path()
 
 
+## A model no longer offered gives way to the default; once Pal is ready, it offers to delete the old file.
+func _retire_old_model() -> void:
+	var saved: String = _cfg.get_value("llm", "local_model", "")
+	var from: String = _cfg.get_value("llm", "trying_from", "")
+	var old := ""
+	if not from.is_empty() and from not in Settings.LOCAL_MODELS:
+		old = from
+	elif saved not in Settings.LOCAL_MODELS:
+		old = saved if not saved.is_empty() else Settings.OLD_DEFAULT_MODEL
+	if old.is_empty():
+		return
+	_cfg.set_value("llm", "local_model", Settings.local_model(_cfg))
+	_cfg.set_value("llm", "trying_from", "")
+	if str(_cfg.get_value("llm", "replaced", "")).is_empty():
+		_cfg.set_value("llm", "replaced", old)
+	_cfg.save(SETTINGS_PATH)
+
+
 ## Undoes a model change that is still on trial; true if there was one.
 func _back_to_last_model() -> bool:
 	var last: String = _cfg.get_value("llm", "trying_from", "")
@@ -277,7 +304,7 @@ func _process(delta: float) -> void:
 	var fading := _fade_subtitles(state == PalNode.THINKING or state == PalNode.SPEAKING)
 	var moving := thinking or state == PalNode.SPEAKING or target > 0.0 or fading \
 		or maxf(_level, maxf(_think, maxf(_center[0], _side[0]))) > SETTLED
-	var dialog := is_instance_valid(_settings) or is_instance_valid(_removal)
+	var dialog := is_instance_valid(_settings) or is_instance_valid(_removal) or typed.visible
 	Engine.max_fps = ACTIVE_FPS if moving or dialog else IDLE_FPS
 	if not moving:
 		return
@@ -355,7 +382,7 @@ func _state_text(state: int) -> String:
 	var key := "stopped"
 	match state:
 		PalNode.LOADING:
-			key = "loading"
+			return _loading_text()
 		PalNode.LISTENING:
 			return TEXTS[_lang]["listening"] + (" •" if pal.hearing() else "")
 		PalNode.THINKING:
@@ -363,6 +390,16 @@ func _state_text(state: int) -> String:
 		PalNode.SPEAKING:
 			key = "speaking"
 	return TEXTS[_lang][key]
+
+
+func _loading_text() -> String:
+	var done: int = pal.downloaded_bytes()
+	var total: int = pal.download_bytes()
+	var t: Dictionary = TEXTS[_lang]
+	if total > 0:
+		var percent := mini(int(100.0 * done / total), 100)
+		return t["downloading"] % [percent, Settings.gigabytes(done, _lang), Settings.gigabytes(total, _lang)]
+	return t["downloading_size"] % Settings.gigabytes(done, _lang) if done > 0 else t["loading"]
 
 
 ## _input, not _unhandled_input: this Control consumes clicks and touches before they would get there.
@@ -373,6 +410,16 @@ func _input(event: InputEvent) -> void:
 	var click := event as InputEventMouseButton
 	var pressed_key := key != null and key.pressed and not key.echo
 	var tapped := click != null and click.pressed
+	if typed.visible:
+		if (pressed_key and key.keycode == KEY_ESCAPE) or (tapped and not typed.get_global_rect().has_point(click.position)):
+			_close_typed()
+		return
+	if (pressed_key and key.keycode == KEY_T) or (tapped and type_button.get_global_rect().has_point(click.position)):
+		typed.placeholder_text = TEXTS[_lang]["type"]
+		typed.show()
+		typed.grab_focus()
+		get_viewport().set_input_as_handled()
+		return
 	if (pressed_key and key.keycode == KEY_L) or (tapped and language.get_global_rect().has_point(click.position)):
 		_switch_language()
 	elif (pressed_key and key.keycode == KEY_S) or (tapped and menu.get_global_rect().has_point(click.position)):
@@ -383,6 +430,21 @@ func _input(event: InputEvent) -> void:
 		_cfg.set_value("user", "party", _party)
 		_cfg.save(SETTINGS_PATH)
 		_restart()
+
+
+## While Pal loads, the line stays in the field.
+func _send_typed(text: String) -> void:
+	var state := pal.state()
+	if text.strip_edges().is_empty() or state == PalNode.LOADING or state == PalNode.STOPPED:
+		return
+	pal.type_line(text)
+	_close_typed()
+
+
+func _close_typed() -> void:
+	typed.clear()
+	typed.release_focus()
+	typed.hide()
 
 
 func _switch_language() -> void:

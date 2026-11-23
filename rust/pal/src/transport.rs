@@ -5,7 +5,8 @@
 //! ```text
 //!   pal_mic endpoint (hear::mic) ── route pal_hear ──┐
 //!   static + limiter, 50/s ──────── route pal_tick ──┼──► [pal.inbox] ──► route pal_conversation
-//!   reports of the routes below (Report) ────────────┘      Input         Conversation::handle, the main loop
+//!   reports of the routes below (Report) ────────────┤      Input         Conversation::handle, the main loop
+//!   a typed line (Agent::type_line) ─────────────────┘
 //!                                                                              │ transcribe(pcm)
 //!                                                                              ├──► caller pal_stt ──► Parakeet
 //!   prefill() read_ahead() reply() ──► [pal.llm]                               │
@@ -29,7 +30,7 @@
 //!   `[pal.inbox]` [`Input`], `[pal.llm]` [`LlmRequest`], `[pal.speech]` [`ToSpeaker`].
 //! - `[pal.speech]` carries control messages and, in one order with them, tokens in the format of mq-bridge's
 //!   `stream_to`, from the server, the local model and canned replies alike; a reply's last token says how it ended.
-//! - A [`Report`] publishes to `[pal.inbox]` from inside a handler, as mq-bridge 1.6 has no `emit_to` (AGENTS.md, upstream candidates).
+//! - A [`Report`] publishes to `[pal.inbox]` from inside a handler; a failed send is only logged.
 //!
 //! Ending a turn:
 //!
@@ -46,11 +47,9 @@ use std::path::Path;
 use std::sync::Arc;
 
 use mq_bridge::blocking_handler::{BlockingHandler, CancelHandle, HandlerContext, ThreadedHandler};
-use mq_bridge::endpoints::create_consumer_from_route;
 use mq_bridge::get_or_create_channel;
 use mq_bridge::models::{Endpoint, EndpointType, LimiterMiddleware, MemoryConfig, Middleware, StaticConfig};
-use mq_bridge::traits::{MessageConsumer, MessageDisposition, MessagePublisher};
-use mq_bridge::{Caller, CanonicalMessage, Handled, HandlerError, Publisher, Route};
+use mq_bridge::{Caller, CanonicalMessage, Handled, HandlerError, Publisher, Route, Topology};
 use tokio::runtime::Handle;
 
 pub use messages::{CORRELATION_ID, End, Input, LlmRequest, Report, Spoken, ToSpeaker, Token, trace_received};
@@ -105,10 +104,9 @@ pub fn deploy<H: BlockingHandler>(
     // [pal.inbox]: pal_llm `Prefilled`, `Failed`, pal_speak `FirstPiece`, `Said`, `Done`, `Failed`, the voice's
     // playback `Audible`, `Quiet`.
     let reply = rt.block_on(async {
-        let inbox = publisher(INBOX).await?;
-        let to_inbox = rt.clone();
+        let to_inbox = publisher(INBOX).await?;
         let report: Report = Arc::new(move |s: Spoken| {
-            if let Err(e) = to_inbox.block_on(inbox.send(s.to_message())) {
+            if let Err(e) = to_inbox.blocking_send(s.to_message()) {
                 eprintln!("llm_pal: report: {e:#}");
             }
         });
@@ -116,45 +114,39 @@ pub fn deploy<H: BlockingHandler>(
             Some(config) => (Some(Server::start(config).await?), Some(publisher(SERVER_CANCEL).await?)),
             None => (None, None),
         };
-        let llm = failure_ends_turn(brain::handler(model, server, report.clone()), report.clone());
-        let llm = ThreadedHandler::with_emitter(llm, emitter(SPEECH).await?);
+        let speech = publisher(SPEECH).await?;
+        let llm_handler =
+            ThreadedHandler::builder(failure_ends_turn(brain::handler(model, server, report.clone()), report.clone()))
+                .emit_to("tokens", speech.clone())
+                .build();
         speaker.report_to(report.clone());
-        let speak = failure_ends_turn(handlers::speak(speaker, language, report.clone()), report);
-        let speak = ThreadedHandler::new(speak);
+        let speak_handler =
+            ThreadedHandler::new(failure_ends_turn(handlers::speak(speaker, language, report.clone()), report));
         let routes = Routes {
             llm: publisher(LLM_IN).await?,
-            speech: publisher(SPEECH).await?,
-            cancels: vec![llm.cancel_handle(), speak.cancel_handle()],
+            speech,
+            cancels: vec![llm_handler.cancel_handle(), speak_handler.cancel_handle()],
         };
-        Ok::<_, mq_bridge::anyhow::Error>((routes, server_cancel, llm, speak))
+        Ok::<_, mq_bridge::anyhow::Error>((routes, server_cancel, llm_handler, speak_handler))
     });
-    let (routes, server_cancel, llm, speak) = reply.map_err(routes_error)?;
+    let (routes, server_cancel, llm_handler, speak_handler) = reply.map_err(routes_error)?;
     let transport = Transport { rt: rt.clone(), routes, server_cancel, stt: Some(stt), model: model_thread };
-    let conversation = ThreadedHandler::new(conversation(transport)?);
+    let conversation_handler = ThreadedHandler::new(conversation(transport)?);
 
     let topic = |name| Endpoint::new_memory(name, CAPACITY);
-    let deployed = rt.block_on(async {
-        // 1. Input: the microphone and a ticker write to [pal.inbox]; they start first, so nothing is lost.
-        let hear = Route::new(mic, inbox()).deploy(ROUTE_HEAR).await;
-        hear.map_err(|e| Error::Audio(format!("{e:#}")))?;
-        Route::new(static_ticker(), inbox()).with_batch_size(1).deploy(ROUTE_TICK).await.map_err(routes_error)?;
-        // 2. Reply: [pal.llm] → model or server → [pal.speech] → sentences, gate and voice.
-        // A handler may send several messages per input, so it writes to the next topic itself.
-        Route::new(topic(LLM_IN), Endpoint::null()).with_handler(llm).deploy(ROUTE_LLM).await.map_err(routes_error)?;
-        Route::new(topic(SPEECH), Endpoint::null())
-            .with_handler(speak)
-            .deploy(ROUTE_SPEAK)
-            .await
-            .map_err(routes_error)?;
-        // 3. Control, last: a conversation that ends at once stops the reply routes, so they must be deployed.
-        let control = Route::new(inbox(), Endpoint::null()).with_handler(conversation);
-        control.deploy(ROUTE_CONVERSATION).await.map_err(routes_error)
-    });
-    if deployed.is_err() {
-        stop_inbox(rt);
-        rt.block_on(stop_routes());
-    }
-    deployed.map(|_| ())
+    // Input starts first, so nothing is lost. The conversation starts last: if it ends at once, it stops the reply
+    // routes, so they must be deployed. A handler may send several messages per input, so it sends them itself.
+    let topology = Topology::new("pal")
+        .route(ROUTE_HEAR, Route::new(mic, inbox()))
+        .route(ROUTE_TICK, Route::new(static_ticker(), inbox()).with_batch_size(1))
+        .route(ROUTE_LLM, Route::handled_by(topic(LLM_IN), llm_handler))
+        .route(ROUTE_SPEAK, Route::handled_by(topic(SPEECH), speak_handler))
+        .route(ROUTE_CONVERSATION, Route::handled_by(inbox(), conversation_handler))
+        .stop_order([ROUTE_HEAR, ROUTE_TICK, ROUTE_CONVERSATION, ROUTE_LLM, ROUTE_SPEAK]);
+    rt.block_on(topology.deploy()).map(|_| ()).map_err(|e| {
+        let source = format!("{:#}", e.source);
+        if e.route == ROUTE_HEAR { Error::Audio(source) } else { Error::Routes(source) }
+    })
 }
 
 /// Reports a handler's error or panic as `Spoken::Failed`: the route would only drop the message, and the
@@ -248,7 +240,7 @@ impl Transport {
         self.to_speaker("", ToSpeaker::Resume)
     }
 
-    /// Stops the turn in every stage: running work ends, waiting data is skipped. Control messages to the
+    /// Stops the turn in every route: running work ends, waiting data is skipped. Control messages to the
     /// speaker still arrive.
     pub fn cancel(&self, turn: &str) {
         self.routes.cancels.iter().for_each(|c| c.cancel(turn));
@@ -324,6 +316,11 @@ pub(crate) fn clear_topics() {
     }
 }
 
+/// A way into `[pal.inbox]` from outside the routes.
+pub fn inbox_publisher(rt: &Handle) -> Result<Publisher> {
+    rt.block_on(publisher(INBOX)).map_err(routes_error)
+}
+
 /// `[pal.inbox]`: everything the conversation reacts to, as `Input`.
 pub fn inbox() -> Endpoint {
     Endpoint::new_memory(INBOX, CAPACITY)
@@ -345,70 +342,6 @@ pub fn start_stt(rt: &Handle, model: &Path) -> Result<Caller> {
     })
 }
 
-/// A request whose reply streams back on another topic (`stream_to`), the way a `Caller` waits for one answer.
-pub struct StreamCall {
-    name: &'static str,
-    requests: Publisher,
-    replies: Box<dyn MessageConsumer>,
-    runtime: Handle,
-}
-
-impl StreamCall {
-    /// `endpoint` answers requests and streams their tokens to `replies`.
-    pub async fn new(name: &'static str, endpoint: Endpoint, replies: &Endpoint) -> mq_bridge::anyhow::Result<Self> {
-        Ok(Self {
-            name,
-            requests: Publisher::new(endpoint).await?,
-            replies: create_consumer_from_route(name, replies).await?,
-            runtime: Handle::current(),
-        })
-    }
-
-    /// Sends `request` as `turn` and passes each token of its reply to `piece`; returns the last token, which says
-    /// how the reply ended. A request that dies before its last token ends as `End::Failed`.
-    pub fn call(
-        &mut self,
-        turn: &str,
-        request: CanonicalMessage,
-        mut piece: impl FnMut(CanonicalMessage) -> std::result::Result<(), HandlerError>,
-    ) -> std::result::Result<Token, HandlerError> {
-        let request = request.with_metadata_kv(CORRELATION_ID, turn);
-        let requests = self.requests.clone();
-        // The answer is the whole text again; the tokens already carry it. It only tells of a request that died.
-        let mut answer = self.runtime.spawn(async move { requests.send(request).await });
-        let mut index = 0;
-        loop {
-            let received = self.runtime.block_on(async {
-                tokio::select! {
-                    biased;
-                    received = self.replies.receive() => received.map(Ok).map_err(failed),
-                    answered = &mut answer => Ok(Err(match answered {
-                        Ok(Err(e)) => format!("{e:#}"),
-                        Err(e) => e.to_string(),
-                        Ok(Ok(_)) => "the request ended without its last token".into(),
-                    })),
-                }
-            })?;
-            let received = match received {
-                Ok(received) => received,
-                Err(error) => return Ok(Token::last(turn, index, End::Failed, &error)),
-            };
-            let _ = self.runtime.block_on((received.commit)(MessageDisposition::Ack));
-            trace_received(self.name, &received.message);
-            let token = Token::from_message(&received.message);
-            // The rest of an earlier reply whose forwarding failed.
-            if token.turn != turn {
-                continue;
-            }
-            if token.end.is_some() {
-                return Ok(token);
-            }
-            piece(received.message)?;
-            index += 1;
-        }
-    }
-}
-
 pub fn failed(e: impl std::fmt::Display) -> HandlerError {
     HandlerError::NonRetryable(mq_bridge::anyhow::anyhow!("{e}"))
 }
@@ -417,12 +350,8 @@ fn routes_error(e: impl std::fmt::Display) -> Error {
     Error::Routes(format!("{e:#}"))
 }
 
-async fn publisher(topic: &str) -> mq_bridge::anyhow::Result<Publisher> {
+pub(crate) async fn publisher(topic: &str) -> mq_bridge::anyhow::Result<Publisher> {
     Publisher::new(Endpoint::new_memory(topic, CAPACITY)).await
-}
-
-pub(crate) async fn emitter(topic: &str) -> mq_bridge::anyhow::Result<Arc<dyn MessagePublisher>> {
-    Ok(publisher(topic).await?.inner())
 }
 
 #[cfg(test)]

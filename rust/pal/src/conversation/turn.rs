@@ -48,7 +48,7 @@ impl Conversation {
             }
             Input::Event(Event::Pause(seg)) => (seg, true),
             Input::Event(Event::Segment(seg)) => (seg, false),
-            Input::Event(Event::Resume | Event::Lost) | Input::Spoken(_) => return None,
+            Input::Event(Event::Resume | Event::Lost) | Input::Spoken(_) | Input::Typed(_) => return None,
         };
         if let Some(before) = &self.carry {
             seg.pcm = [before.as_slice(), &seg.pcm].concat();

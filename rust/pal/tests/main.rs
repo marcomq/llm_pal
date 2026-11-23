@@ -57,7 +57,8 @@ fn segments() -> Vec<Segment> {
 #[test]
 #[ignore = "downloads several GB"]
 fn download_models() {
-    pal::downloader::ensure(&models(), &pal::downloader::all_files(), &Default::default()).unwrap();
+    pal::downloader::ensure(&models(), &pal::downloader::all_files(), &Default::default(), &Default::default())
+        .unwrap();
 }
 
 /// Against a running Ollama with the model `PAL_OLLAMA_MODEL` (default `pal-test-qwen`, a thinking model):
@@ -66,10 +67,10 @@ mod ollama {
     use std::time::{Duration, Instant};
 
     use mq_bridge::models::Endpoint;
-    use mq_bridge::{CanonicalMessage, Publisher};
+    use mq_bridge::{CanonicalMessage, Publisher, StreamCaller};
     use pal::think::local_llm::{Message, Role};
     use pal::think::remote_llm::{Provider, RemoteConfig};
-    use pal::transport::{CORRELATION_ID, End, StreamCall, Token, failed};
+    use pal::transport::{CORRELATION_ID, End, Token};
     use tokio::runtime::Runtime;
 
     /// Far below what a thinking model takes (minutes), far above a warm reply.
@@ -78,7 +79,7 @@ mod ollama {
     struct Chat {
         runtime: Runtime,
         config: RemoteConfig,
-        call: StreamCall,
+        call: StreamCaller,
         cancel: Publisher,
     }
 
@@ -102,7 +103,7 @@ mod ollama {
             let cancel_from = Endpoint::new_memory(&format!("test.{name}.cancel"), 16);
             let endpoint = config.endpoint(&tokens, &cancel_from).unwrap();
             let (call, cancel) = runtime.block_on(async {
-                (StreamCall::new(name, endpoint, &tokens).await.unwrap(), Publisher::new(cancel_from).await.unwrap())
+                (StreamCaller::new(name, endpoint).await.unwrap(), Publisher::new(cancel_from).await.unwrap())
             });
             Self { runtime, config, call, cancel }
         }
@@ -115,21 +116,22 @@ mod ollama {
             let request = CanonicalMessage::from(self.config.payload(&messages));
             let started = Instant::now();
             let (mut text, mut first_word) = (String::new(), None);
-            let (runtime, cancel) = (&self.runtime, &self.cancel);
-            let last = self
-                .call
-                .call(turn, request, |piece| {
-                    text.push_str(&Token::from_message(&piece).text);
-                    if first_word.is_none() {
-                        first_word = Some(started.elapsed());
-                        if cancel_at_first_word {
-                            let stop = CanonicalMessage::from("").with_metadata_kv(CORRELATION_ID, turn);
-                            runtime.block_on(cancel.send(stop)).map_err(failed)?;
-                        }
+            let mut reply = self.runtime.block_on(self.call.start(turn, request)).unwrap();
+            let last = loop {
+                let message = self.runtime.block_on(reply.next()).expect("a last token").into_message();
+                let token = Token::from_message(&message);
+                if token.end.is_some() {
+                    break token;
+                }
+                text.push_str(&token.text);
+                if first_word.is_none() {
+                    first_word = Some(started.elapsed());
+                    if cancel_at_first_word {
+                        let stop = CanonicalMessage::from("").with_metadata_kv(CORRELATION_ID, turn);
+                        self.runtime.block_on(self.cancel.send(stop)).unwrap();
                     }
-                    Ok(())
-                })
-                .unwrap();
+                }
+            };
             Reply { text, last, first_word }
         }
     }
@@ -254,7 +256,7 @@ mod models {
     #[ignore = "needs models/"]
     fn pool_replies_against_the_model() {
         let _llama = llama_turn();
-        let model = LocalLlm::new(&models().join("Qwen3.5-2B-Q4_K_M.gguf"), LlmConfig::default()).unwrap();
+        let model = LocalLlm::new(&models().join("SmolLM3-Q4_K_M.gguf"), LlmConfig::default()).unwrap();
         let mut llm = model.session().unwrap();
         let mut persona = Persona::kitt(Language::German, DEFAULT_NAME);
         llm.set_fixed_messages(persona.fixed_messages());
@@ -283,7 +285,7 @@ mod models {
         let _llama = llama_turn();
         let stt = Stt::new();
         let t = Instant::now();
-        let model = LocalLlm::new(&models().join("Qwen3.5-2B-Q4_K_M.gguf"), LlmConfig::default()).unwrap();
+        let model = LocalLlm::new(&models().join("SmolLM3-Q4_K_M.gguf"), LlmConfig::default()).unwrap();
         let mut llm = model.session().unwrap();
         eprintln!("llm load {} ms", t.elapsed().as_millis());
         let mut persona = Persona::kitt(Language::German, DEFAULT_NAME);
@@ -354,7 +356,7 @@ mod reply {
         let parts = Parts {
             mic: Endpoint::new_memory("test.mic", 1),
             stt: rt.block_on(Caller::deploy("test_stt", none)).unwrap(),
-            model: Some(Model::start(&models().join("Qwen3.5-2B-Q4_K_M.gguf"), persona.fixed_messages()).unwrap()),
+            model: Some(Model::start(&models().join("SmolLM3-Q4_K_M.gguf"), persona.fixed_messages()).unwrap()),
             server: None,
             speaker: speaker.clone(),
             language: LANG,
@@ -369,6 +371,7 @@ mod reply {
                     Some(Input::Spoken(Spoken::Audible { .. } | Spoken::Quiet)) => {}
                     Some(Input::Spoken(s)) => drop(tx.send(s)),
                     Some(Input::Event(e)) => panic!("no microphone, but {e:?}"),
+                    Some(Input::Typed(line)) => panic!("nothing typed, but {line}"),
                     None => {}
                 }
                 Ok(Handled::Ack)

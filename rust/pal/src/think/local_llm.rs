@@ -63,6 +63,7 @@ pub struct LocalLlm {
     threads: i32,
     banned: Vec<LlamaLogitBias>,
     path: PathBuf,
+    format: Format,
 }
 
 fn err(e: impl std::fmt::Display) -> Error {
@@ -82,7 +83,15 @@ impl LocalLlm {
             .filter(|&t| unspeakable(&vocab.token_to_piece(t, false, None)))
             .map(|t| LlamaLogitBias::new(t, f32::NEG_INFINITY))
             .collect();
-        Ok(Self { model, backend, cfg, threads, banned, path })
+        // SmolLM3's vocabulary holds Llama's tokens too, so the architecture comes first.
+        let format = match model.meta_val_str("general.architecture").as_deref() {
+            Ok("smollm3") => Format::SmolLm3,
+            Ok("gemma4") => Format::Gemma4,
+            Ok("granitehybrid") => Format::Granite,
+            _ if vocab.tokenize(b"<|eot_id|>", false, true).len() == 1 => Format::Llama3,
+            _ => Format::ChatMl,
+        };
+        Ok(Self { model, backend, cfg, threads, banned, path, format })
     }
 }
 
@@ -187,7 +196,7 @@ impl LlmSession<'_> {
     /// Reads `messages` into the cache ahead of time, so a reply to a prompt that starts with them only reads the
     /// rest. Pal calls this while it speaks, after the history changed.
     pub fn prefill(&mut self, messages: &[Message]) -> Result<()> {
-        self.read(&chatml_turns(messages))?;
+        self.read(&turns(self.llm.format, messages))?;
         self.prefilled = Some(self.cached.len());
         Ok(())
     }
@@ -197,7 +206,8 @@ impl LlmSession<'_> {
     pub fn read_ahead(&mut self, messages: &[Message], mark: usize) -> Result<()> {
         let Some((last, before)) = messages.split_last() else { return Ok(()) };
         let Some(said) = last.content.get(..mark) else { return Ok(()) };
-        self.read(&format!("{}{}{said}", chatml_turns(before), opening(last.role)))
+        let format = self.llm.format;
+        self.read(&format!("{}{}{said}", turns(format, before), opening(format, last.role)))
     }
 
     fn read(&mut self, text: &str) -> Result<()> {
@@ -232,9 +242,9 @@ impl LlmSession<'_> {
 
         // The fixed messages end where the next message starts, or with the prompt if it holds just them.
         let vocab = self.llm.model.vocab();
-        let im_start = vocab.tokenize("<|im_start|>".as_bytes(), false, true).first().copied();
+        let message_start = vocab.tokenize(self.llm.format.message_start().as_bytes(), false, true).first().copied();
         let starts: Vec<usize> =
-            prompt.iter().enumerate().filter(|(_, t)| Some(**t) == im_start).map(|(i, _)| i).collect();
+            prompt.iter().enumerate().filter(|(_, t)| Some(**t) == message_start).map(|(i, _)| i).collect();
         let fixed_end = starts.get(self.fixed).copied().or((starts.len() == self.fixed).then_some(n_prompt));
         if let Some(e) = fixed_end.filter(|&e| self.store && self.cached.is_empty() && e + logits as usize <= n_prompt)
         {
@@ -339,27 +349,78 @@ impl LlmSession<'_> {
     }
 }
 
-/// ChatML as used by Qwen. The empty think block turns Qwen's reasoning mode off.
+/// How a model's prompt is written, told from its architecture and vocabulary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Format {
+    /// As used by Qwen. The empty think block turns Qwen's reasoning mode off.
+    ChatMl,
+    Llama3,
+    /// ChatML as in SmolLM3's template, without its date, which would change the cached prompt every day.
+    SmolLm3,
+    Gemma4,
+    Granite,
+}
+
+impl Format {
+    fn message_start(self) -> &'static str {
+        match self {
+            Self::ChatMl | Self::SmolLm3 => "<|im_start|>",
+            Self::Llama3 => "<|start_header_id|>",
+            Self::Gemma4 => "<|turn>",
+            Self::Granite => "<|start_of_role|>",
+        }
+    }
+
+    fn message_end(self, role: Role) -> &'static str {
+        match (self, role) {
+            (Self::SmolLm3, Role::System) => "\n\n",
+            (Self::ChatMl | Self::SmolLm3, _) => "<|im_end|>\n",
+            (Self::Llama3, _) => "<|eot_id|>",
+            (Self::Gemma4, _) => "<turn|>\n",
+            (Self::Granite, _) => "<|end_of_text|>\n",
+        }
+    }
+}
+
 pub fn chatml(messages: &[Message]) -> String {
-    let mut p = chatml_turns(messages);
-    p.push_str(opening(Role::Assistant));
+    prompt_text(Format::ChatMl, messages)
+}
+
+fn prompt_text(format: Format, messages: &[Message]) -> String {
+    let mut p = turns(format, messages);
+    p.push_str(opening(format, Role::Assistant));
     p
 }
 
-fn chatml_turns(messages: &[Message]) -> String {
+fn turns(format: Format, messages: &[Message]) -> String {
     let mut p = String::new();
     for m in messages {
-        p.push_str(&format!("{}{}<|im_end|>\n", opening(m.role), m.content));
+        p.push_str(&format!("{}{}{}", opening(format, m.role), m.content, format.message_end(m.role)));
     }
     p
 }
 
-/// Earlier replies keep their empty think block too, so the cached tokens of a reply match the next prompt.
-fn opening(role: Role) -> &'static str {
-    match role {
-        Role::System => "<|im_start|>system\n",
-        Role::User => "<|im_start|>user\n",
-        Role::Assistant => "<|im_start|>assistant\n<think>\n\n</think>\n\n",
+/// Earlier replies keep Qwen's empty think block too, so the cached tokens of a reply match the next prompt.
+fn opening(format: Format, role: Role) -> &'static str {
+    match (format, role) {
+        (Format::ChatMl, Role::System) => "<|im_start|>system\n",
+        (Format::ChatMl, Role::User) => "<|im_start|>user\n",
+        (Format::ChatMl, Role::Assistant) => "<|im_start|>assistant\n<think>\n\n</think>\n\n",
+        (Format::Llama3, Role::System) => "<|start_header_id|>system<|end_header_id|>\n\n",
+        (Format::Llama3, Role::User) => "<|start_header_id|>user<|end_header_id|>\n\n",
+        (Format::Llama3, Role::Assistant) => "<|start_header_id|>assistant<|end_header_id|>\n\n",
+        (Format::SmolLm3, Role::System) => {
+            "<|im_start|>system\n## Metadata\n\nKnowledge Cutoff Date: June 2025\nReasoning Mode: /no_think\n\n\
+             ## Custom Instructions\n\n"
+        }
+        (Format::SmolLm3, Role::User) => "<|im_start|>user\n",
+        (Format::SmolLm3, Role::Assistant) => "<|im_start|>assistant\n<think>\n\n</think>\n",
+        (Format::Gemma4, Role::System) => "<|turn>system\n",
+        (Format::Gemma4, Role::User) => "<|turn>user\n",
+        (Format::Gemma4, Role::Assistant) => "<|turn>model\n",
+        (Format::Granite, Role::System) => "<|start_of_role|>system<|end_of_role|>",
+        (Format::Granite, Role::User) => "<|start_of_role|>user<|end_of_role|>",
+        (Format::Granite, Role::Assistant) => "<|start_of_role|>assistant<|end_of_role|>",
     }
 }
 
@@ -384,7 +445,7 @@ impl LlmSession<'_> {
     fn generate(&mut self, messages: &[Message], cancel: &AtomicBool, on_text: &mut dyn FnMut(&str)) -> Result<String> {
         let (model, cfg) = (&self.llm.model, &self.llm.cfg);
         let vocab = model.vocab();
-        let prompt = vocab.tokenize(chatml(messages).as_bytes(), vocab.should_add_bos(), true);
+        let prompt = vocab.tokenize(prompt_text(self.llm.format, messages).as_bytes(), vocab.should_add_bos(), true);
         let n_prompt = prompt.len();
         if n_prompt + cfg.max_tokens > cfg.n_ctx as usize {
             return Err(err(format!("prompt of {n_prompt} tokens does not fit n_ctx {}", cfg.n_ctx)));
@@ -499,10 +560,71 @@ mod tests {
         );
     }
 
+    #[test]
+    fn llama3_ends_in_an_open_assistant_turn() {
+        let m = [Message::new(Role::System, "Be brief."), Message::new(Role::User, "Hello")];
+        assert_eq!(
+            prompt_text(Format::Llama3, &m),
+            "<|start_header_id|>system<|end_header_id|>\n\nBe brief.<|eot_id|>\
+             <|start_header_id|>user<|end_header_id|>\n\nHello<|eot_id|>\
+             <|start_header_id|>assistant<|end_header_id|>\n\n"
+        );
+    }
+
+    #[test]
+    fn smollm3_follows_its_template_without_the_date() {
+        let m = [
+            Message::new(Role::System, "SYS"),
+            Message::new(Role::User, "U1"),
+            Message::new(Role::Assistant, "A1"),
+            Message::new(Role::User, "U2"),
+        ];
+        assert_eq!(
+            prompt_text(Format::SmolLm3, &m),
+            "<|im_start|>system\n## Metadata\n\nKnowledge Cutoff Date: June 2025\nReasoning Mode: /no_think\n\n\
+             ## Custom Instructions\n\nSYS\n\n<|im_start|>user\nU1<|im_end|>\n\
+             <|im_start|>assistant\n<think>\n\n</think>\nA1<|im_end|>\n<|im_start|>user\nU2<|im_end|>\n\
+             <|im_start|>assistant\n<think>\n\n</think>\n"
+        );
+    }
+
+    #[test]
+    fn gemma4_follows_its_template() {
+        let m = [
+            Message::new(Role::System, "SYS"),
+            Message::new(Role::User, "U1"),
+            Message::new(Role::Assistant, "A1"),
+            Message::new(Role::User, "U2"),
+        ];
+        assert_eq!(
+            prompt_text(Format::Gemma4, &m),
+            "<|turn>system\nSYS<turn|>\n<|turn>user\nU1<turn|>\n<|turn>model\nA1<turn|>\n\
+             <|turn>user\nU2<turn|>\n<|turn>model\n"
+        );
+    }
+
+    #[test]
+    fn granite_follows_its_template() {
+        let m = [
+            Message::new(Role::System, "SYS"),
+            Message::new(Role::User, "U1"),
+            Message::new(Role::Assistant, "A1"),
+            Message::new(Role::User, "U2"),
+        ];
+        assert_eq!(
+            prompt_text(Format::Granite, &m),
+            "<|start_of_role|>system<|end_of_role|>SYS<|end_of_text|>\n\
+             <|start_of_role|>user<|end_of_role|>U1<|end_of_text|>\n\
+             <|start_of_role|>assistant<|end_of_role|>A1<|end_of_text|>\n\
+             <|start_of_role|>user<|end_of_role|>U2<|end_of_text|>\n\
+             <|start_of_role|>assistant<|end_of_role|>"
+        );
+    }
+
     fn model_path() -> PathBuf {
         std::env::var_os("PAL_LLM")
             .map(PathBuf::from)
-            .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../models/Qwen3.5-2B-Q4_K_M.gguf"))
+            .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../models/SmolLM3-Q4_K_M.gguf"))
     }
 
     #[test]
@@ -518,23 +640,25 @@ mod tests {
         session.prefill(&context).unwrap();
         let vocab = llm.model.vocab();
         let tokens = |text: &str| vocab.tokenize(text.as_bytes(), vocab.should_add_bos(), true).len();
-        let history = chatml_turns(&context);
+        let format = llm.format;
+        let history = turns(format, &context);
         let mut ask = |said: &str| {
             let mut m = context.to_vec();
             m.push(Message::new(Role::User, format!("{said} [Frage]")));
             let stop = AtomicBool::new(false);
             session.reply(&m, &stop, &mut |_| stop.store(true, Ordering::Relaxed)).unwrap();
-            let read = (session.last_prefill(), tokens(&chatml(&m)));
+            let read = (session.last_prefill(), tokens(&prompt_text(format, &m)));
             session.read_ahead(&m, said.rfind(' ').unwrap()).unwrap();
             (read, session.last_prefill())
         };
-        let head = tokens(&format!("{history}<|im_start|>user\nWie wird das"));
+        let head = tokens(&format!("{history}{}Wie wird das", opening(format, Role::User)));
         let (_, ahead) = ask("Wie wird das Wetter?");
-        assert_eq!(ahead, head - tokens(&history), "reads ahead from the prefill");
+        // At most: a model whose memory can be cut anywhere keeps more than the last checkpoint.
+        assert!(ahead <= head - tokens(&history), "reads ahead from the prefill");
         let ((read, of), _) = ask("Wie wird das Wetter morgen in Berlin?");
-        assert_eq!(read, of - head, "the reply reads on from the read-ahead");
+        assert!(read <= of - head, "the reply reads on from the read-ahead");
         let ((read, of), _) = ask("Wie war das Wetter gestern in Berlin?");
-        assert_eq!(read, of - tokens(&history), "a change before the mark goes back to the prefill");
+        assert!(read <= of - tokens(&history), "a change before the mark goes back to the prefill");
     }
 
     #[test]

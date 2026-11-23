@@ -39,7 +39,7 @@ pub struct PalNode {
     /// The stopped agent until its thread has finished, and a `start` (model dir) waiting for that.
     stopping: Option<Agent>,
     pending_start: Option<GString>,
-    /// Pocket TTS catalog voice for `language`; takes effect on `start`.
+    /// Pocket TTS voice, spoken in `language`; takes effect on `start`.
     #[export]
     pocket_voice: GString,
     /// Fish Audio speaks when both key and voice ID are set; takes effect on `start`.
@@ -108,10 +108,10 @@ impl INode for PalNode {
             fish_api_key: GString::new(),
             fish_voice_id: GString::new(),
             fish_model: GString::new(),
-            language: "de".into(),
+            language: "en".into(),
             barge_in: true,
             smart_turn: true,
-            llm_model: "Qwen3.5-2B-Q4_K_M.gguf".into(),
+            llm_model: "SmolLM3-Q4_K_M.gguf".into(),
             clear_llm_cache: false,
             persona_file: GString::new(),
             stt_model: "parakeet-tdt-0.6b-v3".into(),
@@ -291,6 +291,26 @@ impl PalNode {
             return State::Loading as i32;
         }
         self.agent.as_ref().map_or(State::Stopped, Agent::state) as i32
+    }
+
+    /// Bytes of the running model download so far, 0 without one.
+    #[func]
+    fn downloaded_bytes(&self) -> i64 {
+        self.agent.as_ref().map_or(0, |agent| agent.download().0 as i64)
+    }
+
+    /// Size of the running model download, 0 without one or if a server doesn't tell it.
+    #[func]
+    fn download_bytes(&self) -> i64 {
+        self.agent.as_ref().map_or(0, |agent| agent.download().1 as i64)
+    }
+
+    /// Answers a typed line as if the user had said it.
+    #[func]
+    fn type_line(&self, text: GString) {
+        if let Some(agent) = &self.agent {
+            agent.type_line(&text.to_string());
+        }
     }
 
     /// True while the user's speech is heard.

@@ -2,7 +2,7 @@
 //! `[pal.speech]` [`ToSpeaker`].
 //!
 //! A turn's data (requests, tokens) carries the turn in `correlation_id`. mq-bridge's `CancelHandle`
-//! cancels by that key, so a cancelled turn's waiting data is skipped in every stage. Control messages to the
+//! cancels by that key, so a cancelled turn's waiting data is skipped in every route. Control messages to the
 //! speaker (`Hold`, `Release`, `Discard`, `Stop`, `Pause`, `Resume`) carry the turn under `turn` instead: a cancel
 //! never drops them.
 
@@ -157,7 +157,7 @@ impl Token {
     }
 }
 
-/// `[pal.speech]`: what the speaker stage gets for a turn.
+/// `[pal.speech]`: what the `pal_speak` handler gets for a turn.
 #[derive(Debug, PartialEq, Eq)]
 pub enum ToSpeaker {
     /// Control: keep this turn's sentences until `Release` or `Discard`.
@@ -213,15 +213,24 @@ impl ToSpeaker {
 pub enum Input {
     Event(Event),
     Spoken(Spoken),
+    /// A line the user typed instead of saying it.
+    Typed(String),
 }
 
 impl Input {
+    pub fn typed(text: &str) -> CanonicalMessage {
+        CanonicalMessage::from(text).with_metadata_kv(KIND, "typed")
+    }
+
     pub fn from_message(msg: &CanonicalMessage) -> Option<Self> {
         if msg.metadata.contains_key(EVENT) {
             return Event::from_message(msg).map(Input::Event);
         }
         let turn = || meta(msg, TURN).to_string();
         let text = || msg.get_payload_str().into_owned();
+        if meta(msg, KIND) == "typed" {
+            return Some(Input::Typed(text()));
+        }
         let before = meta(msg, AT_BEFORE).parse().unwrap_or(0);
         let at = || Instant::now().checked_sub(Duration::from_micros(age_us(msg.message_id).max(0) as u64 + before));
         Some(Input::Spoken(match meta(msg, KIND) {
