@@ -10,6 +10,7 @@ the user by name (default "Michael", spoken "Maikel"). Rust workspace in `rust/`
 |---|---|
 | `rust/pal` | The app, one crate. `godot.rs` `PalNode` (entry), `conversation/` the main loop, `hear/` microphone → text, `think/` persona and LLM, `speak/` text → sound, `transport.rs` the mq-bridge connections, `downloader.rs` models, `platform/` Android vs. desktop |
 | `rust/pal-tts` | Kyutai Pocket TTS, copied from kyutai-labs/pocket-tts. Don't reformat or edit except for marked "pal-tts change" spots |
+| `scripts/llm_bench` | Separate crate `llm-bench`, not in the workspace or the APK, no Pal dependency: benchmark of local GGUF models through llama.cpp. Manifests, results and report scripts in the same folder |
 | `godot/` | UI (`main.gd`, `main.tscn`), settings form (`settings.gd`), KITT shader |
 | `generate_voice` | Separate crate `pal-voice`, not in the workspace or the APK: makes a voice of one's own from a recording. Needs Kyutai's gated cloning model |
 
@@ -107,7 +108,7 @@ Topics, routes and reports: the diagram at the top of `transport.rs`. What it do
   (`AgentConfig.remote`), filled in `conversation::load`; without a server, the model reads the persona's context
   while loading. The local model and its session live on their own thread (`brain::Model`).
 - `local_llm.rs`: `LocalLlm` via llama.cpp (default model SmolLM3 3B GGUF), `LlmSession::reply`. The prompt format
-  (`Format`: ChatML, Llama 3, SmolLM3, Gemma 4, Granite) follows from the model's architecture and vocabulary. The model's thread runs
+  (`Format`: ChatML, Llama 3, SmolLM3, Gemma 3, Gemma 4, Granite, Phi, Falcon) follows from the model's architecture and vocabulary. The model's thread runs
   at nice 10 on Android (`platform::background_thread`); llama.cpp's workers inherit it, so TTS and audio come first.
   Models with recurrent layers (such as Qwen3.5, no longer offered): the cache goes back only to checkpoints (after the fixed messages, the last prefill,
   the last two read-aheads or prompts). A checkpoint inside a prompt would split its reading into two decodes,
@@ -161,6 +162,9 @@ explicit consent; never add recordings or cloned voices to the repository or the
   chosen (`llm/local_model`). A new one is on trial (`llm/trying_from`): `main.gd` goes back if it fails or the app
   died before `ready_to_listen`. `llm/replaced` (the old model, or the new one if it failed) makes it ask before
   `PalNode.remove_llm` once Pal is ready. `Settings.fits_ram` disables models too large for the device.
+- Own models: any GGUF the user loads in the settings is copied (on a thread, via `.part`) to `llm/` in the model
+  folder and chosen as `llm/<file>.gguf`, on trial like a catalog model. Pal neither lists nor downloads models outside
+  the catalog (e.g. Llama), so their licenses bind only the user. An own model whose file is gone gives way to the default.
 - Characters: `think/character.rs`, files in `personas/<de|en>/<name>.txt` in the model folder, one choice for both languages
   (`persona/name`, empty = built-in), loaded from the active language's file. A file gets the language's `Profile.tag_rule` added and none of KITT's texts.
   `PalNode.persona_file`; a file that is missing in that language or can't be read falls back to the built-in character (`persona_error`). The

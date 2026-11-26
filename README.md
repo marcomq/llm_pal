@@ -117,6 +117,9 @@ that others take it for the real person. This is not legal advice; when in doubt
 
 License: MIT OR Apache-2.0. Silero VAD: MIT. Smart Turn: BSD-2-Clause. Parakeet TDT: CC-BY-4.0 (see below). SmolLM3, Gemma 4 and Granite 4.0: Apache-2.0. Pocket TTS code: MIT (check the Kyutai model card for the weights). No GPL.
 
+Any other GGUF model (e.g. Llama) can be loaded in the settings ("Load model (GGUF)"). Pal neither ships nor downloads
+such models; the license of a model you load is between you and its provider.
+
 Speech recognition uses [Parakeet TDT 0.6B v3](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3) by NVIDIA, licensed
 under [CC-BY-4.0](https://creativecommons.org/licenses/by/4.0/). Pal uses the int8 ONNX conversion by istupakov
 ([pinned revision](https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/tree/8f23f0c03c8761650bdb5b40aaf3e40d2c15f1ce),

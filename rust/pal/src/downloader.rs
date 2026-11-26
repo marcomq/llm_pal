@@ -162,19 +162,33 @@ pub fn all_files() -> Vec<String> {
     CATALOG.iter().filter(|(path, ..)| !ON_REQUEST.contains(path)).map(|(path, ..)| path.to_string()).collect()
 }
 
-/// Deletes a catalog LLM with its saved prompt states and an unfinished download. Refuses any other file.
+/// Folder in the model folder for GGUF files the user brought, `Settings.OWN_MODEL_DIR`; Pal never downloads into it.
+const OWN_LLM_DIR: &str = "llm";
+
+/// `llm/<file>.gguf`: one of the user's own models.
+fn is_own_llm(name: &str) -> bool {
+    name.strip_prefix(OWN_LLM_DIR)
+        .and_then(|rest| rest.strip_prefix('/'))
+        .is_some_and(|file| file.ends_with(".gguf") && !file.contains(['/', '\\']))
+}
+
+/// Deletes a catalog LLM or one of one's own, with its saved prompt states and an unfinished download or copy.
+/// Refuses any other file.
 pub fn remove_llm(dir: &Path, name: &str) -> Result<()> {
-    if !name.ends_with(".gguf") || !(CATALOG.iter().any(|(path, ..)| *path == name) || RETIRED.contains(&name)) {
+    let catalog = CATALOG.iter().any(|(path, ..)| *path == name) || RETIRED.contains(&name);
+    if !name.ends_with(".gguf") || !(catalog || is_own_llm(name)) {
         return Err(Error::Download(format!("{name} is not a catalog model")));
     }
     let failed = |e: std::io::Error| Error::Download(format!("removing {name}: {e}"));
-    let saved = format!("{name}.");
-    let mut files = vec![dir.join(name), dir.join(name).with_extension("part")];
-    for entry in std::fs::read_dir(dir).map_err(failed)? {
+    let path = dir.join(name);
+    let folder = path.parent().unwrap_or(dir);
+    let saved = format!("{}.", name.rsplit('/').next().unwrap_or(name));
+    let mut files = vec![path.clone(), path.with_extension("part")];
+    for entry in std::fs::read_dir(folder).map_err(failed)? {
         let file = entry.map_err(failed)?.file_name();
         let file = file.to_string_lossy();
         if file.starts_with(&saved) && (file.ends_with(".state") || file.ends_with(".tmp")) {
-            files.push(dir.join(file.as_ref()));
+            files.push(folder.join(file.as_ref()));
         }
     }
     for file in files {
@@ -189,12 +203,18 @@ pub fn remove_llm(dir: &Path, name: &str) -> Result<()> {
 /// Deletes the saved prompt states of every model; they are made again on the next start.
 pub fn remove_llm_caches(dir: &Path) -> Result<()> {
     let failed = |e: std::io::Error| Error::Download(format!("removing the LLM cache: {e}"));
-    for entry in std::fs::read_dir(dir).map_err(failed)? {
-        let entry = entry.map_err(failed)?;
-        let file = entry.file_name();
-        let file = file.to_string_lossy();
-        if file.contains(".gguf.") && (file.ends_with(".state") || file.ends_with(".tmp")) {
-            std::fs::remove_file(entry.path()).map_err(failed)?;
+    let own = dir.join(OWN_LLM_DIR);
+    for folder in [dir, own.as_path()] {
+        if folder != dir && !folder.is_dir() {
+            continue;
+        }
+        for entry in std::fs::read_dir(folder).map_err(failed)? {
+            let entry = entry.map_err(failed)?;
+            let file = entry.file_name();
+            let file = file.to_string_lossy();
+            if file.contains(".gguf.") && (file.ends_with(".state") || file.ends_with(".tmp")) {
+                std::fs::remove_file(entry.path()).map_err(failed)?;
+            }
         }
     }
     Ok(())
@@ -323,8 +343,9 @@ mod tests {
     fn removing_the_caches_keeps_the_models() {
         let dir = std::env::temp_dir().join(format!("pal-remove-caches-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let gone = ["a.gguf.01.state", "b.gguf.02.state", "b.gguf.03.tmp"];
-        let kept = ["a.gguf", "b.gguf", "b.part", "notes.state"];
+        std::fs::create_dir_all(dir.join(OWN_LLM_DIR)).unwrap();
+        let gone = ["a.gguf.01.state", "b.gguf.02.state", "b.gguf.03.tmp", "llm/c.gguf.04.state"];
+        let kept = ["a.gguf", "b.gguf", "b.part", "notes.state", "llm/c.gguf"];
         for file in gone.iter().chain(&kept) {
             std::fs::write(dir.join(file), b"x").unwrap();
         }
@@ -353,7 +374,23 @@ mod tests {
         assert!(kept.iter().all(|f| dir.join(f).exists()));
         assert!(remove_llm(&dir, "mine.gguf").is_err());
         assert!(remove_llm(&dir, "../mine.gguf").is_err());
+        assert!(remove_llm(&dir, "llm/../mine.gguf").is_err());
         assert!(dir.join("mine.gguf").exists());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn removing_an_own_model_takes_only_its_own_files() {
+        let dir = std::env::temp_dir().join(format!("pal-remove-own-llm-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join(OWN_LLM_DIR)).unwrap();
+        let gone = ["llm/mine.gguf", "llm/mine.part", "llm/mine.gguf.0123.state"];
+        let kept = ["llm/other.gguf", "llm/other.gguf.0123.state", "mine.gguf.0123.state"];
+        for file in gone.iter().chain(&kept) {
+            std::fs::write(dir.join(file), b"x").unwrap();
+        }
+        remove_llm(&dir, gone[0]).unwrap();
+        assert!(gone.iter().all(|f| !dir.join(f).exists()));
+        assert!(kept.iter().all(|f| dir.join(f).exists()));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

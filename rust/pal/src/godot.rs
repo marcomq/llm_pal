@@ -274,7 +274,7 @@ impl PalNode {
         Language::from_code(&language.to_string()).map(Character::template).unwrap_or_default().as_str().into()
     }
 
-    /// Deletes a catalog LLM other than the one in use, with its cache files.
+    /// Deletes a catalog LLM or one of one's own other than the one in use, with its cache files.
     #[func]
     fn remove_llm(&self, model_dir: GString, name: GString) -> bool {
         if name == self.llm_model {

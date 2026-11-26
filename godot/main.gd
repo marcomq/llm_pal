@@ -213,18 +213,20 @@ func _model_dir() -> String:
 	return ProjectSettings.globalize_path("res://").path_join("../models").simplify_path()
 
 
-## A model no longer offered gives way to the default; once Pal is ready, it offers to delete the old file.
+## A model no longer offered, or an own one whose file is gone, gives way to the default; once Pal is ready, it
+## offers to delete the old file.
 func _retire_old_model() -> void:
 	var saved: String = _cfg.get_value("llm", "local_model", "")
 	var from: String = _cfg.get_value("llm", "trying_from", "")
 	var old := ""
-	if not from.is_empty() and from not in Settings.LOCAL_MODELS:
+	if not from.is_empty() and not Settings.known_model(from, _model_dir()):
 		old = from
-	elif saved not in Settings.LOCAL_MODELS:
+	elif not Settings.known_model(saved, _model_dir()):
 		old = saved if not saved.is_empty() else Settings.OLD_DEFAULT_MODEL
 	if old.is_empty():
 		return
-	_cfg.set_value("llm", "local_model", Settings.local_model(_cfg))
+	var known := Settings.known_model(saved, _model_dir())
+	_cfg.set_value("llm", "local_model", saved if known else Settings.LOCAL_MODELS[0])
 	_cfg.set_value("llm", "trying_from", "")
 	if str(_cfg.get_value("llm", "replaced", "")).is_empty():
 		_cfg.set_value("llm", "replaced", old)
@@ -266,7 +268,7 @@ func _offer_removal() -> void:
 	var t: Dictionary = TEXTS[_lang]
 	_removal = ConfirmationDialog.new()
 	_removal.title = t["remove_title"]
-	_removal.dialog_text = t["remove_text"] % [old.get_basename(), gb.replace(".", ",") if _lang == "de" else gb]
+	_removal.dialog_text = t["remove_text"] % [old.get_file().get_basename(),gb.replace(".", ",") if _lang == "de" else gb]
 	_removal.dialog_autowrap = true
 	_removal.ok_button_text = t["remove"]
 	_removal.cancel_button_text = t["keep"]
@@ -274,7 +276,7 @@ func _offer_removal() -> void:
 		if pal.remove_llm(_model_dir(), old):
 			_forget_replaced()
 		else:
-			_error = TEXTS[_lang]["remove_failed"] % old.get_basename()
+			_error = TEXTS[_lang]["remove_failed"] % old.get_file().get_basename()
 			_removal.queue_free())
 	_removal.canceled.connect(_forget_replaced)
 	add_child(_removal)

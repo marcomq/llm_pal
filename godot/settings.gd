@@ -25,6 +25,9 @@ const DEFAULT_FISH_MODEL := "s2.1-pro-free"
 ## Same files as in `downloader.rs`. The first is the default; the others are fetched only once chosen.
 const LOCAL_MODELS := ["SmolLM3-Q4_K_M.gguf", "gemma-4-E2B-it-Q4_K_M.gguf", "granite-4.0-h-1b-Q4_0.gguf"]
 const LOCAL_MODEL_BYTES := [1_920_000_000, 3_110_000_000, 870_000_000]
+## GGUF files the user brought, in the model folder; `downloader.rs` has the same folder. Pal offers none of its own.
+const OWN_MODEL_DIR := "llm"
+const COPY_CHUNK := 16 * 1024 * 1024
 ## The default of earlier versions, which saved no choice for it.
 const OLD_DEFAULT_MODEL := "Qwen3.5-2B-Q4_K_M.gguf"
 ## The least RAM a model can be chosen with.
@@ -44,6 +47,8 @@ const TEXTS := {
 		"local_models": ["SmolLM3 3B (Standard, 1,9 GB)", "Gemma 4 E2B (3,1 GB)",
 			"Granite 4.0 1B (0,9 GB, am besten Englisch)"],
 		"no_room": "Zu wenig Speicher: %s GB frei, %s GB nötig.",
+		"model_import": "Modell laden (GGUF)", "model_bad": "Modell nicht geladen: %s",
+		"model_copying": "Modell wird kopiert …", "own_model": "%s (eigene Datei)",
 		"persona": "Persönlichkeit",
 		"persona_default": "KITT (Standard)", "persona_import": "Datei laden", "persona_template": "Vorlage",
 		"persona_bad": "Datei nicht geladen: %s", "persona_written": "Zum Bearbeiten: %s",
@@ -61,6 +66,8 @@ const TEXTS := {
 		"local_models": ["SmolLM3 3B (default, 1.9 GB)", "Gemma 4 E2B (3.1 GB)",
 			"Granite 4.0 1B (0.9 GB, best in English)"],
 		"no_room": "Not enough storage: %s GB free, %s GB needed.",
+		"model_import": "Load model (GGUF)", "model_bad": "Model not loaded: %s",
+		"model_copying": "Copying the model …", "own_model": "%s (own file)",
 		"persona": "Personality",
 		"persona_default": "KITT (default)", "persona_import": "Load file", "persona_template": "Template",
 		"persona_bad": "File not loaded: %s", "persona_written": "To edit: %s",
@@ -79,6 +86,9 @@ var _model_dir: String
 var _texts: Dictionary
 var _lang: String
 var _local_model := OptionButton.new()
+var _model_list := []
+var _copy: Thread
+var _stop_copy := false
 var _local_model_field: Control
 var _notice := Label.new()
 var _name := LineEdit.new()
@@ -182,7 +192,21 @@ static func fits_ram(index: int, ram: int) -> bool:
 ## The chosen local GGUF file, or the default.
 static func local_model(cfg: ConfigFile) -> String:
 	var m: String = cfg.get_value("llm", "local_model", "")
-	return m if m in LOCAL_MODELS else LOCAL_MODELS[0]
+	return m if m in LOCAL_MODELS or m.begins_with(OWN_MODEL_DIR + "/") else LOCAL_MODELS[0]
+
+
+## The user's own GGUF files, as paths in the model folder.
+static func own_models(model_dir: String) -> Array:
+	var dir := model_dir.path_join(OWN_MODEL_DIR)
+	if not DirAccess.dir_exists_absolute(dir):
+		return []
+	var found := Array(DirAccess.get_files_at(dir)).filter(func(f: String) -> bool: return f.ends_with(".gguf"))
+	return found.map(func(f: String) -> String: return OWN_MODEL_DIR.path_join(f))
+
+
+## A catalog model, or one of one's own that is still there.
+static func known_model(m: String, model_dir: String) -> bool:
+	return m in LOCAL_MODELS or (m.begins_with(OWN_MODEL_DIR + "/") and FileAccess.file_exists(model_dir.path_join(m)))
 
 
 ## Whether a start loads the chosen catalog model, so that it can prove or fail its trial.
@@ -294,10 +318,19 @@ func _init(cfg: ConfigFile, path: String, lang: String, model_dir: String) -> vo
 		_key.text = ""
 		_show_provider())
 	_field(form, "llm", _provider)
-	for i in LOCAL_MODELS.size():
-		_local_model.add_item(_texts["local_models"][i], i)
-		_local_model.set_item_disabled(i, not fits_ram(i, OS.get_memory_info()["physical"]))
-	_local_model_field = _field(form, "local_model", _local_model)
+	_model_list = LOCAL_MODELS + own_models(model_dir)
+	for i in _model_list.size():
+		_local_model.add_item(_model_label(_model_list[i]), i)
+		if i < LOCAL_MODELS.size():
+			_local_model.set_item_disabled(i, not fits_ram(i, OS.get_memory_info()["physical"]))
+	var load_model := Button.new()
+	load_model.text = _texts["model_import"]
+	load_model.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	load_model.pressed.connect(_pick_file.bind("*.gguf;GGUF", _import_model))
+	var model_box := VBoxContainer.new()
+	model_box.add_child(_local_model)
+	model_box.add_child(load_model)
+	_local_model_field = _field(form, "local_model", model_box)
 	_remote.append(_field(form, "url", _url))
 	_remote.append(_field(form, "model", _model))
 	_remote.append(_field(form, "effort", _effort))
@@ -322,6 +355,76 @@ func _init(cfg: ConfigFile, path: String, lang: String, model_dir: String) -> vo
 	cancel.text = _texts["cancel"]
 	cancel.pressed.connect(queue_free)
 	buttons.add_child(cancel)
+
+
+func _model_label(m: String) -> String:
+	var i := LOCAL_MODELS.find(m)
+	return _texts["local_models"][i] if i >= 0 else _texts["own_model"] % m.get_file().get_basename()
+
+
+## Copies a GGUF file into the own models' folder on a thread; the copy is selected once it is complete.
+func _import_model(from: String) -> void:
+	if _copy != null:
+		return
+	var source := FileAccess.open(from, FileAccess.READ)
+	if source == null or source.get_length() < 4 or source.get_buffer(4).get_string_from_ascii() != "GGUF":
+		_notice.text = _texts["model_bad"] % from.get_file()
+		return
+	var dir := _model_dir.path_join(OWN_MODEL_DIR)
+	DirAccess.make_dir_recursive_absolute(dir)
+	var access := DirAccess.open(dir)
+	var free := access.get_space_left() if access != null else 0
+	var needed := source.get_length() + SPARE_BYTES
+	source.close()
+	if free < needed:
+		_notice.text = _texts["no_room"] % [gigabytes(free, _lang), gigabytes(needed, _lang)]
+		return
+	var stem := from.get_file().get_basename().validate_filename()
+	stem = stem if not stem.is_empty() else "model"
+	var free_name := stem
+	var n := 2
+	while FileAccess.file_exists(dir.path_join(free_name + ".gguf")):
+		free_name = "%s_%d" % [stem, n]
+		n += 1
+	_notice.text = _texts["model_copying"]
+	_copy = Thread.new()
+	_copy.start(_copy_model.bind(from, dir.path_join(free_name + ".gguf")))
+
+
+## Runs on `_copy`: through a `.part` file, so a broken copy never looks like a model.
+func _copy_model(from: String, to: String) -> void:
+	var part := to.get_basename() + ".part"
+	var source := FileAccess.open(from, FileAccess.READ)
+	var target := FileAccess.open(part, FileAccess.WRITE)
+	var ok := source != null and target != null
+	while ok and not _stop_copy and source.get_position() < source.get_length():
+		target.store_buffer(source.get_buffer(COPY_CHUNK))
+		ok = source.get_error() in [OK, ERR_FILE_EOF] and target.get_error() == OK
+	if target != null:
+		target.close()
+	ok = ok and not _stop_copy and DirAccess.rename_absolute(part, to) == OK
+	if not ok:
+		DirAccess.remove_absolute(part)
+	_model_copied.call_deferred(from.get_file(), OWN_MODEL_DIR.path_join(to.get_file()), ok)
+
+
+func _model_copied(from: String, added: String, ok: bool) -> void:
+	_copy.wait_to_finish()
+	_copy = null
+	if not ok:
+		_notice.text = _texts["model_bad"] % from
+		return
+	_notice.text = ""
+	_model_list.append(added)
+	_local_model.add_item(_model_label(added))
+	_local_model.select(_model_list.size() - 1)
+
+
+## A copy still running when the form closes is stopped and its `.part` file removed.
+func _exit_tree() -> void:
+	if _copy != null:
+		_stop_copy = true
+		_copy.wait_to_finish()
 
 
 ## A voice of one's own that exists in only one language names it: in the other, Pal uses the default voice.
@@ -508,7 +611,7 @@ func open() -> void:
 	_effort.text = _cfg.get_value("llm", "effort", "")
 	_key.text = _cfg.get_value("llm", "api_key", "")
 	_fallback.button_pressed = _cfg.get_value("llm", "fallback", false)
-	_local_model.select(LOCAL_MODELS.find(local_model(_cfg)))
+	_local_model.select(maxi(_model_list.find(local_model(_cfg)), 0))
 	_show_provider()
 	visible = true
 
@@ -538,7 +641,7 @@ func _uses_local() -> bool:
 ## Missing models need room for the download; says so in the form if there is too little.
 func _has_room(index: int) -> bool:
 	var dir := DirAccess.open(_model_dir)
-	if dir == null or FileAccess.file_exists(_model_dir.path_join(LOCAL_MODELS[index])):
+	if dir == null or index >= LOCAL_MODELS.size() or FileAccess.file_exists(_model_dir.path_join(LOCAL_MODELS[index])):
 		return true
 	var needed: int = LOCAL_MODEL_BYTES[index] + SPARE_BYTES
 	var free := dir.get_space_left()
@@ -569,7 +672,9 @@ func _changes_the_cache(chosen: String) -> bool:
 
 
 func _save() -> void:
-	var chosen: String = LOCAL_MODELS[_local_model.selected]
+	if _copy != null:
+		return
+	var chosen: String = _model_list[_local_model.selected]
 	if _uses_local() and OS.get_environment("PAL_LLM").is_empty() and not _has_room(_local_model.selected):
 		return
 	if _changes_the_cache(chosen):
