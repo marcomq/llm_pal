@@ -22,16 +22,19 @@ const DEFAULT_MODELS := {"ollama": "llama3.2", "openai": "gpt-6-luna", "anthropi
 const DEFAULT_EFFORTS := {"ollama": "none", "openai": "none", "anthropic": "low"}
 const VOICE_SOURCES := ["local", "fish"]
 const DEFAULT_FISH_MODEL := "s2.1-pro-free"
-## Same files as in `downloader.rs`. The first is the default; the others are fetched only once chosen.
-const LOCAL_MODELS := ["SmolLM3-Q4_K_M.gguf", "gemma-4-E2B-it-Q4_K_M.gguf", "granite-4.0-h-1b-Q4_0.gguf"]
-const LOCAL_MODEL_BYTES := [1_920_000_000, 3_110_000_000, 870_000_000]
+## Same files as in `downloader.rs`, fetched once chosen or as the default (`default_model`).
+const LOCAL_MODELS := ["gemma-4-E2B-it-Q4_K_M.gguf", "granite-3.3-2b-instruct-Q4_K_M.gguf", "SmolLM3-Q4_K_M.gguf",
+	"granite-4.0-h-1b-Q4_0.gguf"]
+const LOCAL_MODEL_BYTES := [3_110_000_000, 1_550_000_000, 1_920_000_000, 870_000_000]
+## Gemma 4 E2B is the default from this much RAM (6 GB phones report ~5.7 GB), Granite 3.3 2B below or if unknown.
+const GEMMA_DEFAULT_RAM := 5_500_000_000
 ## GGUF files the user brought, in the model folder; `downloader.rs` has the same folder. Pal offers none of its own.
 const OWN_MODEL_DIR := "llm"
 const COPY_CHUNK := 16 * 1024 * 1024
 ## The default of earlier versions, which saved no choice for it.
 const OLD_DEFAULT_MODEL := "Qwen3.5-2B-Q4_K_M.gguf"
 ## The least RAM a model can be chosen with.
-const LOCAL_MODEL_MIN_RAM := [0, 0, 0]
+const LOCAL_MODEL_MIN_RAM := [0, 0, 0, 0]
 ## Kept free beside a new model, for its cache files and the system.
 const SPARE_BYTES := 1_000_000_000
 ## Same limit as in `character.rs`.
@@ -44,8 +47,8 @@ const TEXTS := {
 		"voice": "Stimme", "voice_local": "Lokal",
 		"voice_fish": "Fish Audio (online)", "fish_voice": "Stimmen-ID",
 		"llm": "Sprachmodell", "url": "Server-Adresse", "local_model": "Lokales Modell",
-		"local_models": ["SmolLM3 3B (Standard, 1,9 GB)", "Gemma 4 E2B (3,1 GB)",
-			"Granite 4.0 1B (0,9 GB, am besten Englisch)"],
+		"local_models": ["Gemma 4 E2B (3,1 GB, bestes Deutsch)", "Granite 3.3 2B (1,5 GB, schnell)",
+			"SmolLM3 3B (1,9 GB, am langsamsten)", "Granite 4.0 1B (0,9 GB, am besten Englisch)"],
 		"no_room": "Zu wenig Speicher: %s GB frei, %s GB nötig.",
 		"model_import": "Modell laden (GGUF)", "model_bad": "Modell nicht geladen: %s",
 		"model_copying": "Modell wird kopiert …", "own_model": "%s (eigene Datei)",
@@ -63,8 +66,8 @@ const TEXTS := {
 		"voice": "Voice", "voice_local": "Local", "voice_fish": "Fish Audio (online)",
 		"fish_voice": "Voice ID", "llm": "Language model", "url": "Server address",
 		"local_model": "Local model",
-		"local_models": ["SmolLM3 3B (default, 1.9 GB)", "Gemma 4 E2B (3.1 GB)",
-			"Granite 4.0 1B (0.9 GB, best in English)"],
+		"local_models": ["Gemma 4 E2B (3.1 GB, best German)", "Granite 3.3 2B (1.5 GB, fast)",
+			"SmolLM3 3B (1.9 GB, slowest)", "Granite 4.0 1B (0.9 GB, best in English)"],
 		"no_room": "Not enough storage: %s GB free, %s GB needed.",
 		"model_import": "Load model (GGUF)", "model_bad": "Model not loaded: %s",
 		"model_copying": "Copying the model …", "own_model": "%s (own file)",
@@ -192,7 +195,13 @@ static func fits_ram(index: int, ram: int) -> bool:
 ## The chosen local GGUF file, or the default.
 static func local_model(cfg: ConfigFile) -> String:
 	var m: String = cfg.get_value("llm", "local_model", "")
-	return m if m in LOCAL_MODELS or m.begins_with(OWN_MODEL_DIR + "/") else LOCAL_MODELS[0]
+	return m if m in LOCAL_MODELS or m.begins_with(OWN_MODEL_DIR + "/") else default_model()
+
+
+## The model used while none is chosen, by the device's RAM.
+static func default_model() -> String:
+	var ram: int = OS.get_memory_info()["physical"]
+	return LOCAL_MODELS[0] if ram >= GEMMA_DEFAULT_RAM else LOCAL_MODELS[1]
 
 
 ## The user's own GGUF files, as paths in the model folder.

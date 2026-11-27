@@ -73,6 +73,11 @@ const CATALOG: &[Entry] = &[
         "23b20864c9544bd98ac6d5b8c53dec61992cc7add09fdd5f6b77472a4679a148",
     ),
     (
+        "granite-3.3-2b-instruct-Q4_K_M.gguf",
+        "ibm-granite/granite-3.3-2b-instruct-GGUF/resolve/7cdf86ccd1f1bb3491c9b7017b033f2e51367397/granite-3.3-2b-instruct-Q4_K_M.gguf",
+        "ac71e9e32c0bea919b409c5918f69ca74339854b0319c5065e4e9fb6d95c4852",
+    ),
+    (
         "pocket/kyutai/pocket-tts-without-voice-cloning/languages/german/model.safetensors",
         "kyutai/pocket-tts-without-voice-cloning/resolve/1e08e6a23401048648a9fdcfde2f89348215c2a7/languages/german/model.safetensors",
         "9fe42605604832349e3f495177bde56b77ae8fee73b2ed4b63236092ccde7621",
@@ -125,7 +130,8 @@ const CATALOG: &[Entry] = &[
 ];
 
 /// Further LLMs, fetched only once chosen in the settings.
-const ON_REQUEST: &[&str] = &["gemma-4-E2B-it-Q4_K_M.gguf", "granite-4.0-h-1b-Q4_0.gguf"];
+const ON_REQUEST: &[&str] =
+    &["gemma-4-E2B-it-Q4_K_M.gguf", "granite-4.0-h-1b-Q4_0.gguf", "granite-3.3-2b-instruct-Q4_K_M.gguf"];
 
 /// Models Pal no longer offers: never fetched again, but a copy from an earlier version can still be removed.
 const RETIRED: &[&str] = &[

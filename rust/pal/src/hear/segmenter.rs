@@ -27,7 +27,7 @@ impl Default for SegmenterConfig {
         Self {
             on: 0.5,
             off: 0.35,
-            pre_roll_ms: 250,
+            pre_roll_ms: 500,
             end_silence_ms: 700,
             pause_ms: 300,
             tail_ms: 200,
@@ -195,13 +195,23 @@ mod tests {
         assert_eq!(out[0], SegOut::Start { at: 20 * C as u64 });
         let segs = done(&out);
         assert_eq!(segs.len(), 1);
-        let pre = samples(250) as u64;
+        let pre = samples(SegmenterConfig::default().pre_roll_ms) as u64;
         let (start, len, forced) = segs[0];
         assert_eq!(start, 20 * C as u64 - pre);
         assert!(!forced);
         // pre-roll + speech + tail (200 ms, rounded up to whole chunks of silence seen).
         let expected = pre as usize + 30 * C + samples(200);
         assert!((len as i64 - expected as i64).abs() <= C as i64, "len {len} vs {expected}");
+    }
+
+    /// A short, soft first word stays below `on`; the VAD fires only on the louder words ~400 ms later.
+    #[test]
+    fn soft_first_word_before_detection_is_kept() {
+        let out = run(SegmenterConfig::default(), &probs(&[(0.0, 30), (0.3, 5), (0.0, 7), (0.9, 20), (0.0, 40)]));
+        let Some(SegOut::Done { pcm, .. }) = out.iter().find(|o| matches!(o, SegOut::Done { .. })) else {
+            panic!("no segment: {out:?}")
+        };
+        assert!(pcm.first().is_some_and(|&c| c < 30.0), "the soft word (chunks 30..35) is cut off");
     }
 
     #[test]

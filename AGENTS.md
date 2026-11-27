@@ -107,13 +107,13 @@ Topics, routes and reports: the diagram at the top of `transport.rs`. What it do
 - `transport::Parts`: `model` (local, loaded when there is no server or `AgentConfig.fallback`) and `server`
   (`AgentConfig.remote`), filled in `conversation::load`; without a server, the model reads the persona's context
   while loading. The local model and its session live on their own thread (`brain::Model`).
-- `local_llm.rs`: `LocalLlm` via llama.cpp (default model SmolLM3 3B GGUF), `LlmSession::reply`. The prompt format
+- `local_llm.rs`: `LocalLlm` via llama.cpp (default model by RAM: Gemma 4 E2B from ~6 GB, else Granite 3.3 2B; `Settings.default_model`), `LlmSession::reply`. The prompt format
   (`Format`: ChatML, Llama 3, SmolLM3, Gemma 3, Gemma 4, Granite, Phi, Falcon) follows from the model's architecture and vocabulary. The model's thread runs
   at nice 10 on Android (`platform::background_thread`); llama.cpp's workers inherit it, so TTS and audio come first.
   Models with recurrent layers (such as Qwen3.5, no longer offered): the cache goes back only to checkpoints (after the fixed messages, the last prefill,
   the last two read-aheads or prompts). A checkpoint inside a prompt would split its reading into two decodes,
   ~80 ms more on Metal, so read-aheads make them outside the reply's time.
-- Thread counts for llama.cpp, Pocket TTS (xn), Parakeet and Smart Turn: `cpu::fast_cores()`.
+- Thread counts for Pocket TTS (xn), Parakeet and Smart Turn: `cpu::fast_cores()`; for llama.cpp `cpu::llm_threads()`, only the biggest cores (2 on the Pixel 6a, ~1.5× faster than 4).
 - `remote_llm.rs`: builds the mq-bridge endpoint: `openai_chat` with `messages_from_payload` for Ollama and OpenAI,
   the streaming `http_bulk` recipe for Anthropic's `/messages`. Both stream to `pal.llm.tokens` (`stream_to`) and
   stop on `pal.llm.cancel` (`cancel_from`, sent by `Transport::cancel`). `brain::Server` reads them back (mq-bridge's `StreamCaller`)

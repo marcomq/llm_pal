@@ -113,7 +113,25 @@ and still writes raw results. Set `PAL_BENCH_DEVICE` to `Pixel 6a` for that run.
 
 The result file is created exclusively; choose a new path for every run. Do not point the benchmark at a paid remote
 provider: this runner only loads local GGUF files through llama.cpp.
-The speed-only mode is ready to use on the M1; running it on Android still needs a device launch/build path.
+`PAL_BENCH_THREADS` sets the llama.cpp threads (default: at most 4); Pal uses 2 on the Pixel 6a.
+
+On an Android phone over adb (results of 2026-11-27 in [`round3/README.md`](./round3/README.md#on-the-pixel-6a)):
+
+```sh
+cd scripts/llm_bench
+NDK=/opt/homebrew/share/android-commandlinetools/ndk/29.0.14206865
+ANDROID_NDK_HOME=$NDK ANDROID_NDK=$NDK GGML_CPU_ARM_ARCH=armv8.2-a+dotprod+fp16 \
+  cargo ndk -t arm64-v8a --platform 26 build --release
+adb shell mkdir -p /data/local/tmp/bench/models
+adb push target/aarch64-linux-android/release/llm-bench models-round3.json /data/local/tmp/bench/
+adb push $NDK/toolchains/llvm/prebuilt/*/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so /data/local/tmp/bench/
+adb shell "cd /data/local/tmp/bench && LD_LIBRARY_PATH=. PAL_BENCH_MODE=speed PAL_BENCH_THREADS=2 \
+  PAL_BENCH_DEVICE='Pixel 6a' nohup ./llm-bench models models-round3.json speed.jsonl > bench.out 2>&1 < /dev/null &"
+adb pull /data/local/tmp/bench/speed.jsonl results/<date>-pixel6a-speed.jsonl   # once bench.out says the last model is done
+```
+
+`nohup` keeps it running when adb disconnects. The phone heats up over several models; a pause between models
+(not during one) keeps it from throttling.
 
 ## Scored run (round 3)
 

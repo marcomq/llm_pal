@@ -76,7 +76,7 @@ impl LocalLlm {
         backend.void_logs();
         let path = model.to_path_buf();
         let model = LlamaModel::load_from_file(&backend, model, &LlamaModelParams::default()).map_err(err)?;
-        let threads = crate::cpu::fast_cores() as i32;
+        let threads = crate::cpu::llm_threads() as i32;
         let vocab = model.vocab();
         let banned = (0..model.n_vocab())
             .map(LlamaToken)

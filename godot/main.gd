@@ -226,7 +226,7 @@ func _retire_old_model() -> void:
 	if old.is_empty():
 		return
 	var known := Settings.known_model(saved, _model_dir())
-	_cfg.set_value("llm", "local_model", saved if known else Settings.LOCAL_MODELS[0])
+	_cfg.set_value("llm", "local_model", saved if known else Settings.default_model())
 	_cfg.set_value("llm", "trying_from", "")
 	if str(_cfg.get_value("llm", "replaced", "")).is_empty():
 		_cfg.set_value("llm", "replaced", old)

@@ -372,7 +372,10 @@ fn run() -> Result<(), Box<dyn Error>> {
         id: chrono::Utc::now().to_rfc3339(),
         device: std::env::var("PAL_BENCH_DEVICE").unwrap_or_else(|_| "unspecified".into()),
         threads,
-        llm_threads: threads.min(MAX_THREADS) as i32,
+        llm_threads: std::env::var("PAL_BENCH_THREADS")
+            .ok()
+            .and_then(|t| t.parse().ok())
+            .unwrap_or(threads.min(MAX_THREADS)) as i32,
         backend: &backend,
         mode,
         tests,
