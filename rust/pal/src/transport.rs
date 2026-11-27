@@ -74,6 +74,8 @@ const ROUTE_TICK: &str = "pal_tick";
 const ROUTE_CONVERSATION: &str = "pal_conversation";
 /// The ticker's rate: a tick about every 20 ms.
 const TICKS_PER_S: f64 = 50.0;
+/// Microphone, VAD and Smart Turn may load slowly while a big model loads cold beside them (5 s was too short).
+const HEAR_STARTUP_MS: u64 = 10_000;
 const ROUTE_LLM: &str = "pal_llm";
 const ROUTE_SPEAK: &str = "pal_speak";
 
@@ -137,7 +139,7 @@ pub fn deploy<H: BlockingHandler>(
     // Input starts first, so nothing is lost. The conversation starts last: if it ends at once, it stops the reply
     // routes, so they must be deployed. A handler may send several messages per input, so it sends them itself.
     let topology = Topology::new("pal")
-        .route(ROUTE_HEAR, Route::new(mic, inbox()))
+        .route(ROUTE_HEAR, Route::new(mic, inbox()).with_startup_timeout_ms(HEAR_STARTUP_MS))
         .route(ROUTE_TICK, Route::new(static_ticker(), inbox()).with_batch_size(1))
         .route(ROUTE_LLM, Route::handled_by(topic(LLM_IN), llm_handler))
         .route(ROUTE_SPEAK, Route::handled_by(topic(SPEECH), speak_handler))
