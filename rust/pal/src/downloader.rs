@@ -34,7 +34,7 @@ const SILERO: Entry = (
 );
 
 /// Every file Pal can use. Licenses: Silero VAD MIT, Smart Turn BSD-2, Parakeet CC-BY-4.0,
-/// SmolLM3, Gemma 4 and Granite 4.0 Apache-2.0, Pocket TTS CC-BY-4.0.
+/// Gemma 4, Granite 3.3, SmolLM3 and Granite 4.0 Apache-2.0, Pocket TTS CC-BY-4.0.
 const CATALOG: &[Entry] = &[
     SILERO,
     (
@@ -130,8 +130,7 @@ const CATALOG: &[Entry] = &[
 ];
 
 /// Further LLMs, fetched only once chosen in the settings.
-const ON_REQUEST: &[&str] =
-    &["gemma-4-E2B-it-Q4_K_M.gguf", "granite-4.0-h-1b-Q4_0.gguf", "granite-3.3-2b-instruct-Q4_K_M.gguf"];
+const ON_REQUEST: &[&str] = &["gemma-4-E2B-it-Q4_K_M.gguf", "granite-4.0-h-1b-Q4_0.gguf", "SmolLM3-Q4_K_M.gguf"];
 
 /// Models Pal no longer offers: never fetched again, but a copy from an earlier version can still be removed.
 const RETIRED: &[&str] = &[
@@ -338,7 +337,7 @@ mod tests {
     #[test]
     fn larger_models_are_not_part_of_the_setup() {
         let files = all_files();
-        assert!(files.iter().any(|f| f == "SmolLM3-Q4_K_M.gguf"));
+        assert!(files.iter().any(|f| f == "granite-3.3-2b-instruct-Q4_K_M.gguf"));
         for model in ON_REQUEST {
             assert!(CATALOG.iter().any(|(p, ..)| p == model), "{model}");
             assert!(!files.iter().any(|f| f == model), "{model}");

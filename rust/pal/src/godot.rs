@@ -111,7 +111,7 @@ impl INode for PalNode {
             language: "en".into(),
             barge_in: true,
             smart_turn: true,
-            llm_model: "SmolLM3-Q4_K_M.gguf".into(),
+            llm_model: "granite-3.3-2b-instruct-Q4_K_M.gguf".into(),
             clear_llm_cache: false,
             persona_file: GString::new(),
             stt_model: "parakeet-tdt-0.6b-v3".into(),

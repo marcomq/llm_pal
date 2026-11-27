@@ -761,9 +761,9 @@ mod tests {
     }
 
     fn model_path() -> PathBuf {
-        std::env::var_os("PAL_LLM")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../models/SmolLM3-Q4_K_M.gguf"))
+        std::env::var_os("PAL_LLM").map(PathBuf::from).unwrap_or_else(|| {
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../models/granite-3.3-2b-instruct-Q4_K_M.gguf")
+        })
     }
 
     #[test]

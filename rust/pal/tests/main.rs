@@ -256,7 +256,7 @@ mod models {
     #[ignore = "needs models/"]
     fn pool_replies_against_the_model() {
         let _llama = llama_turn();
-        let model = LocalLlm::new(&models().join("SmolLM3-Q4_K_M.gguf"), LlmConfig::default()).unwrap();
+        let model = LocalLlm::new(&models().join("granite-3.3-2b-instruct-Q4_K_M.gguf"), LlmConfig::default()).unwrap();
         let mut llm = model.session().unwrap();
         let mut persona = Persona::kitt(Language::German, DEFAULT_NAME);
         llm.set_fixed_messages(persona.fixed_messages());
@@ -285,7 +285,7 @@ mod models {
         let _llama = llama_turn();
         let stt = Stt::new();
         let t = Instant::now();
-        let model = LocalLlm::new(&models().join("SmolLM3-Q4_K_M.gguf"), LlmConfig::default()).unwrap();
+        let model = LocalLlm::new(&models().join("granite-3.3-2b-instruct-Q4_K_M.gguf"), LlmConfig::default()).unwrap();
         let mut llm = model.session().unwrap();
         eprintln!("llm load {} ms", t.elapsed().as_millis());
         let mut persona = Persona::kitt(Language::German, DEFAULT_NAME);
@@ -356,7 +356,9 @@ mod reply {
         let parts = Parts {
             mic: Endpoint::new_memory("test.mic", 1),
             stt: rt.block_on(Caller::deploy("test_stt", none)).unwrap(),
-            model: Some(Model::start(&models().join("SmolLM3-Q4_K_M.gguf"), persona.fixed_messages()).unwrap()),
+            model: Some(
+                Model::start(&models().join("granite-3.3-2b-instruct-Q4_K_M.gguf"), persona.fixed_messages()).unwrap(),
+            ),
             server: None,
             speaker: speaker.clone(),
             language: LANG,

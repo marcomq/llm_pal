@@ -12,7 +12,7 @@ the device: no cloud and no account. Only the optional servers you set up yourse
 > vain, thirsty and unreliable. It is not affiliated with or endorsed by the rights holders of the original series, and
 > it does not use its footage, music, logos or voices.
 
-Microphone → 16 kHz mono → Silero VAD → Smart Turn (end of turn) → speech segments and prosody → Parakeet TDT (STT, via mq-bridge-onnx) → SmolLM3 3B (llama.cpp) →
+Microphone → 16 kHz mono → Silero VAD → Smart Turn (end of turn) → speech segments and prosody → Parakeet TDT (STT, via mq-bridge-onnx) → Gemma 4 E2B or Granite 3.3 2B (llama.cpp) →
 sentence streaming → Kyutai Pocket TTS.
 
 ```
@@ -49,8 +49,9 @@ The UI starts in English; German is one tap away.
 
 ## Local model
 
-The settings offer SmolLM3 3B (default, 1.9 GB), Gemma 4 E2B (3.1 GB) and Granite 4.0 H 1B (0.9 GB, best in English). A
-model other than the default is downloaded only after you choose and save it. After an update from an earlier version, Pal asks whether to delete the
+The settings offer Gemma 4 E2B (3.1 GB, fast, best German), Granite 3.3 2B (1.5 GB), SmolLM3 3B (1.9 GB, slowest) and
+Granite 4.0 H 1B (0.9 GB, weak). The default depends on the device's RAM: Gemma 4 E2B from about 5.5 GB (6 GB phones),
+else Granite 3.3 2B. Another model is downloaded only after you choose and save it. After an update from an earlier version, Pal asks whether to delete the
 model it used before.
 
 ## Personalities
@@ -115,7 +116,7 @@ their personality rights. A consenting speaker does not make a sound-alike safe:
 voice or a protected character can still infringe their rights. Don't pass on recordings or voices (no repository, APK or download; `models/` is git-ignored), and don't use a cloned voice so
 that others take it for the real person. This is not legal advice; when in doubt, use only your own voice.
 
-License: MIT OR Apache-2.0. Silero VAD: MIT. Smart Turn: BSD-2-Clause. Parakeet TDT: CC-BY-4.0 (see below). SmolLM3, Gemma 4 and Granite 4.0: Apache-2.0. Pocket TTS code: MIT (check the Kyutai model card for the weights). No GPL.
+License: MIT OR Apache-2.0. Silero VAD: MIT. Smart Turn: BSD-2-Clause. Parakeet TDT: CC-BY-4.0 (see below). Gemma 4, Granite 3.3, SmolLM3 and Granite 4.0: Apache-2.0. Pocket TTS code: MIT (check the Kyutai model card for the weights). No GPL.
 
 Any other GGUF model (e.g. Llama) can be loaded in the settings ("Load model (GGUF)"). Pal neither ships nor downloads
 such models; the license of a model you load is between you and its provider.

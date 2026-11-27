@@ -349,7 +349,8 @@ fn time_to_the_first_answer_with_the_models() {
     let filter = tracing_subscriber::EnvFilter::from_default_env();
     let _ = tracing_subscriber::fmt().with_env_filter(filter).with_writer(std::io::stderr).try_init();
     let persona = Persona::kitt(LANG, DEFAULT_NAME);
-    let (model, _thread) = Model::start(&models().join("SmolLM3-Q4_K_M.gguf"), persona.fixed_messages()).unwrap();
+    let (model, _thread) =
+        Model::start(&models().join("granite-3.3-2b-instruct-Q4_K_M.gguf"), persona.fixed_messages()).unwrap();
     model.prefill(persona.context(), None).unwrap();
     let stt = |rt: &Runtime| transport::start_stt(rt.handle(), &models().join("parakeet-tdt-0.6b-v3")).unwrap();
     let pal = Pal::start(stt, |report| brain::handler(Some(model), None, report), models());
