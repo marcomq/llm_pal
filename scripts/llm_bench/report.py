@@ -76,6 +76,10 @@ def build_metrics(records: Rows) -> tuple[Rows, Rows, Rows, Rows, Rows]:
     by_model_language: dict[tuple[str, str, str], list[dict[str, Any]]] = defaultdict(list)
     model_rows: list[dict[str, Any]] = []
     for (model, model_file), items in sorted(completed.items()):
+        devices = sorted({item.get("device", "") for item in items})
+        if len(devices) > 1:
+            raise ValueError(f"{model} ({model_file}) has results from several devices: {', '.join(devices)}; "
+                             "report one device at a time")
         by_language: dict[str, list[dict[str, Any]]] = defaultdict(list)
         for item in items:
             by_language[item["language"]].append(item)

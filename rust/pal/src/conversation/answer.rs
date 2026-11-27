@@ -86,7 +86,9 @@ impl Conversation {
         match phase {
             Phase::Replying(t) if t.held => drop(self.drop_turn(t)),
             Phase::Replying(t) => {
-                self.transport.cancel(&t.id);
+                if let Err(e) = self.transport.interrupt(&t.id) {
+                    eprintln!("llm_pal: {e}");
+                }
                 self.done(t);
             }
             _ => {}

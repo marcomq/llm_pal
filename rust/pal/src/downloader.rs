@@ -253,7 +253,16 @@ fn fetch_missing(dir: &Path, files: &[String], stop: &AtomicBool, progress: &Pro
         let url = if url.starts_with("https://") { url.to_string() } else { format!("{HF}/{url}") };
         missing.push((name, path, url, *sha256));
     }
-    let total: Option<u64> = missing.iter().map(|(_, _, url, _)| remote_size(&agent, url)).sum();
+    let mut total = Some(0);
+    for (_, _, url, _) in &missing {
+        if stop.load(Ordering::Relaxed) {
+            return Err(Error::Stopped);
+        }
+        total = remote_size(&agent, url).map(|size| total.unwrap_or(0) + size);
+        if total.is_none() {
+            break;
+        }
+    }
     progress.total.store(total.unwrap_or(0), Ordering::Relaxed);
     for (name, path, url, sha256) in missing {
         eprintln!("llm_pal: downloading {name}");

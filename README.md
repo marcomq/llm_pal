@@ -42,16 +42,16 @@ A tag `v<version>` matching the version in `rust/Cargo.toml` makes the CI build 
 release. It needs the repository secrets `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_ALIAS` and
 `ANDROID_KEYSTORE_PASSWORD`.
 
-Pal downloads missing models into its model folder on start, on the Mac and on Android alike (about 2 GB the first
-time).
+Pal downloads missing models into its model folder on start, on the Mac and on Android alike: the first time about
+2.4 GB with Granite 3.3 2B as the default model, about 4.0 GB with Gemma 4 E2B (see "Local model").
 
 The UI starts in English; German is one tap away.
 
 ## Local model
 
 The settings offer Gemma 4 E2B (3.1 GB, fast, best German), Granite 3.3 2B (1.5 GB), SmolLM3 3B (1.9 GB, slowest) and
-Granite 4.0 H 1B (0.9 GB, weak). The default depends on the device's RAM: Gemma 4 E2B from about 5.5 GB (6 GB phones),
-else Granite 3.3 2B. Another model is downloaded only after you choose and save it. After an update from an earlier version, Pal asks whether to delete the
+Granite 4.0 H 1B (0.9 GB, weak). The default, while no model is saved, depends on the device's RAM: Gemma 4 E2B from 5.5 GB
+(6 GB phones), Granite 3.3 2B below that or if the RAM is unknown. Another model is downloaded only after you choose and save it. After an update from an earlier version, Pal asks whether to delete the
 model it used before.
 
 ## Personalities

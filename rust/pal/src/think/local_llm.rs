@@ -91,7 +91,7 @@ impl LocalLlm {
             Ok("gemma4") => Format::Gemma4,
             Ok("granite" | "granitehybrid") => Format::Granite,
             Ok("lfm2" | "minicpm3" | "qwen2") => Format::ChatMlPlain,
-            Ok("qwen3") => Format::ChatMl,
+            Ok("qwen3" | "qwen35") => Format::ChatMl,
             _ if chat_template.contains("<start_of_turn>") => Format::Gemma3,
             _ if chat_template.contains("<|start_of_role|>") => Format::Granite,
             _ if chat_template.contains("<|end|>") => Format::Phi,
@@ -213,10 +213,15 @@ impl LlmSession<'_> {
     /// Reads `messages` with the last one cut after `mark` bytes, while the user is still saying it: a reply to a
     /// line that starts the same reads only the rest.
     pub fn read_ahead(&mut self, messages: &[Message], mark: usize) -> Result<()> {
-        let Some((last, before)) = messages.split_last() else { return Ok(()) };
-        let Some(said) = last.content.get(..mark) else { return Ok(()) };
+        let Some(last) = messages.last() else { return Ok(()) };
+        if last.content.get(..mark).is_none() {
+            return Ok(());
+        }
+        // The full prompt cut inside the last message, so Gemma 3's merged system prompt stays as it will be.
         let format = self.llm.format;
-        self.read(&format!("{}{}{said}", turns(format, before), opening(format, last.role)))
+        let full = turns(format, messages);
+        let cut = full.len() - format.message_end(last.role).len() - last.content.len() + mark;
+        self.read(&full[..cut])
     }
 
     fn read(&mut self, text: &str) -> Result<()> {

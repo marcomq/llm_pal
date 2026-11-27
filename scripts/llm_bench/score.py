@@ -86,11 +86,12 @@ def check_instructions(reply, expect):
     if "min_words" in expect:
         ok &= len(words) >= expect["min_words"]
     if "must_include" in expect:
-        ok &= all(has_word(fold(text), fold(word), prefix=True) for word in expect["must_include"])
+        forms = [word if isinstance(word, list) else [word] for word in expect["must_include"]]
+        ok &= all(any(has_word(fold(text), fold(form)) for form in words) for words in forms)
     if "one_of" in expect:
         ok &= re.sub(r"[^\w]", "", fold(text)) in expect["one_of"]
     if expect.get("lowercase"):
-        ok &= text == text.lower()
+        ok &= bool(words) and text == text.lower()
     return "pass" if ok else "fail"
 
 
@@ -118,7 +119,7 @@ def same(got, want):
     if isinstance(want, (int, float)):
         return isinstance(got, (int, float)) and not isinstance(got, bool) and abs(got - want) < 1e-9
     if isinstance(want, str):
-        return isinstance(got, str) and got.strip() == want
+        return isinstance(got, str) and got == want
     if isinstance(want, list):
         return isinstance(got, list) and len(got) == len(want) and all(map(same, got, want))
     return isinstance(got, dict) and got.keys() == want.keys() and all(same(got[k], want[k]) for k in want)
@@ -131,7 +132,9 @@ def check_json(reply, expect):
         ok = same(value, want["equals"])
     else:
         ok = (isinstance(value, dict) and set(want["keys"]) <= value.keys()
-              and all(same(value[k], v) for k, v in want["fields"].items()))
+              and all(same(value[k], v) for k, v in want["fields"].items())
+              and all(isinstance(value[k], (int, float)) and not isinstance(value[k], bool) and lo <= value[k] <= hi
+                      for k, (lo, hi) in want.get("ranges", {}).items()))
     return ("pass" if ok else "fail"), value is not None, strict
 
 
@@ -253,6 +256,8 @@ def main():
                                "accepted": FREE_REPLY_RULE, "reply": reply.strip(), "verdict": ""})
             results.append({**results[-1], "category": "writing", "test_id": grammar_id, "verdict": verdict})
 
+    if not results:
+        sys.exit("no scored-mode rows in the results")
     out = Path(args.output_dir)
     out.mkdir(parents=True, exist_ok=True)
     write_csv(out / "items.csv", results)
@@ -266,11 +271,26 @@ def main():
             groups[key]["n"] += 1
             groups[key]["parsed"] += r["parsed"] is True
             groups[key]["strict"] += r["strict_json"] is True
+    # Items of the run's languages that a model has no row for, e.g. after a deadline or a failed model.
+    run_languages = {r["language"] for r in results}
+    expected = defaultdict(set)
+    for suite in suites:
+        if suite["language"] in run_languages:
+            for item in suite["items"]:
+                expected[(suite["category"], suite["language"])].add(item["id"])
+                if suite["category"] == "instructions":
+                    expected[("writing", suite["language"])].add(f"{item['id']}-grammar")
+    for model in {r["model"] for r in results}:
+        for (category, language), ids in expected.items():
+            got = {r["test_id"] for r in results
+                   if r["model"] == model and r["category"] == category and r["language"] == language}
+            for key in ((model, category, language), (model, category, "all")):
+                groups[key]["missing"] += len(ids - got)
     summary = []
     for (model, category, language), g in sorted(groups.items()):
         decided = g["pass"] + g["fail"]
         summary.append({"model": model, "category": category, "language": language, "items": g["n"],
-                        "pass": g["pass"], "fail": g["fail"], "review": g["review"],
+                        "pass": g["pass"], "fail": g["fail"], "review": g["review"], "missing": g["missing"],
                         "pass_pct": round(100 * g["pass"] / decided, 1) if decided else "",
                         "json_parsed": g["parsed"] if category in ("json", "tools") else "",
                         "json_strict": g["strict"] if category in ("json", "tools") else ""})
@@ -279,7 +299,8 @@ def main():
     by = {(s["model"], s["category"], s["language"]): s for s in summary}
     models = sorted({s["model"] for s in summary},
                     key=lambda m: -sum(by.get((m, c, "all"), {}).get("pass_pct") or 0 for c in CATEGORIES))
-    cell = lambda s: "–" if s is None else f"{s['pass_pct']}" + (f" ({s['review']}?)" if s["review"] else "")
+    cell = lambda s: "–" if s is None else (f"{s['pass_pct']}" + (f" ({s['review']}?)" if s["review"] else "")
+                                             + (f" (incomplete: {s['missing']} missing)" if s["missing"] else ""))
     lines = ["| Model | " + " | ".join(CATEGORIES) + " |", "|---|" + "---:|" * len(CATEGORIES)]
     lines += [f"| {m} | " + " | ".join(cell(by.get((m, c, "all"))) for c in CATEGORIES) + " |" for m in models]
     languages = sorted({s["language"] for s in summary if s["language"] != "all"})
@@ -287,7 +308,7 @@ def main():
         lines += ["", f"**{category}** by language", "", "| Model | " + " | ".join(languages) + " |",
                   "|---|" + "---:|" * len(languages)]
         lines += [f"| {m} | " + " | ".join(cell(by.get((m, category, l))) for l in languages) + " |" for m in models]
-    (out / "scores.md").write_text("Pass rate in % (unreviewed items in parentheses).\n\n" + "\n".join(lines) + "\n")
+    (out / "scores.md").write_text("Pass rate in % (unreviewed items in parentheses; incomplete groups say how many items are missing).\n\n" + "\n".join(lines) + "\n")
     print("\n".join(lines))
     if review:
         print(f"\n{len(review)} replies to review: {out / 'review-todo.csv'}")

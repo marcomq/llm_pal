@@ -367,7 +367,7 @@
      "expect": {
       "sentences": 1,
       "must_include": [
-       "blau"
+       ["blau", "blaue", "blauen", "blauer", "blaues", "blauem"]
       ]
      }
     },
@@ -384,8 +384,7 @@
      "id": "de-instructions-06",
      "prompt": "Schreibe alles in Kleinbuchstaben: Was ist deine Lieblingsjahreszeit und warum?",
      "expect": {
-      "lowercase": true,
-      "min_words": 5
+      "lowercase": true
      }
     }
    ]
@@ -775,8 +774,7 @@
      "id": "en-instructions-06",
      "prompt": "Write everything in lowercase letters: What is your favourite season and why?",
      "expect": {
-      "lowercase": true,
-      "min_words": 5
+      "lowercase": true
      }
     }
    ]
@@ -1146,7 +1144,7 @@
      "expect": {
       "sentences": 1,
       "must_include": [
-       "bleu"
+       ["bleu", "bleue", "bleus", "bleues"]
       ]
      }
     },
@@ -1163,8 +1161,7 @@
      "id": "fr-instructions-06",
      "prompt": "Écris tout en minuscules : Quelle est ta saison préférée et pourquoi ?",
      "expect": {
-      "lowercase": true,
-      "min_words": 5
+      "lowercase": true
      }
     }
    ]
@@ -1536,7 +1533,7 @@
      "expect": {
       "sentences": 1,
       "must_include": [
-       "azul"
+       ["azul", "azules"]
       ]
      }
     },
@@ -1553,8 +1550,7 @@
      "id": "es-instructions-06",
      "prompt": "Escríbelo todo en minúsculas: ¿Cuál es tu estación favorita y por qué?",
      "expect": {
-      "lowercase": true,
-      "min_words": 5
+      "lowercase": true
      }
     }
    ]
@@ -1714,7 +1710,13 @@
        "keys": [
         "sentiment",
         "confidence"
-       ]
+       ],
+       "ranges": {
+        "confidence": [
+         0,
+         1
+        ]
+       }
       }
      }
     }

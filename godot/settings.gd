@@ -383,7 +383,8 @@ func _import_model(from: String) -> void:
 	DirAccess.make_dir_recursive_absolute(dir)
 	var access := DirAccess.open(dir)
 	var free := access.get_space_left() if access != null else 0
-	var needed := source.get_length() + SPARE_BYTES
+	var size := source.get_length()
+	var needed := size + SPARE_BYTES
 	source.close()
 	if free < needed:
 		_notice.text = _texts["no_room"] % [gigabytes(free, _lang), gigabytes(needed, _lang)]
@@ -397,21 +398,28 @@ func _import_model(from: String) -> void:
 		n += 1
 	_notice.text = _texts["model_copying"]
 	_copy = Thread.new()
-	_copy.start(_copy_model.bind(from, dir.path_join(free_name + ".gguf")))
+	_copy.start(_copy_model.bind(from, dir.path_join(free_name + ".gguf"), size))
 
 
-## Runs on `_copy`: through a `.part` file, so a broken copy never looks like a model.
-func _copy_model(from: String, to: String) -> void:
+## Runs on `_copy`: through a `.part` file, so a broken copy never looks like a model. The copy must still start
+## like a GGUF file and hold the `size` bytes checked on import.
+func _copy_model(from: String, to: String, size: int) -> void:
 	var part := to.get_basename() + ".part"
 	var source := FileAccess.open(from, FileAccess.READ)
 	var target := FileAccess.open(part, FileAccess.WRITE)
 	var ok := source != null and target != null
+	var copied := 0
 	while ok and not _stop_copy and source.get_position() < source.get_length():
-		target.store_buffer(source.get_buffer(COPY_CHUNK))
+		var chunk := source.get_buffer(COPY_CHUNK)
+		if copied == 0 and (chunk.size() < 4 or chunk.slice(0, 4).get_string_from_ascii() != "GGUF"):
+			ok = false
+			break
+		target.store_buffer(chunk)
+		copied += chunk.size()
 		ok = source.get_error() in [OK, ERR_FILE_EOF] and target.get_error() == OK
 	if target != null:
 		target.close()
-	ok = ok and not _stop_copy and DirAccess.rename_absolute(part, to) == OK
+	ok = ok and not _stop_copy and copied == size and DirAccess.rename_absolute(part, to) == OK
 	if not ok:
 		DirAccess.remove_absolute(part)
 	_model_copied.call_deferred(from.get_file(), OWN_MODEL_DIR.path_join(to.get_file()), ok)

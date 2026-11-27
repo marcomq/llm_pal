@@ -339,13 +339,14 @@ fn run() -> Result<(), Box<dyn Error>> {
     if output_path.starts_with(&model_dir) {
         return Err("results file must be outside the model directory".into());
     }
-    let manifest: Manifest = serde_json::from_reader(BufReader::new(File::open(&args[1])?))?;
+    let mut manifest: Manifest = serde_json::from_reader(BufReader::new(File::open(&args[1])?))?;
     if manifest.models.is_empty() {
         return Err("the model manifest must contain at least one model".into());
     }
     if let Some(invalid) = manifest.models.iter().find(|model| !model.is_valid()) {
         return Err(format!("invalid model metadata: {}", invalid.file).into());
     }
+    manifest.models.iter_mut().for_each(|model| model.sha256.make_ascii_lowercase());
 
     let mode = BenchMode::from_env()?;
     let (tests, source): (Vec<(TestCase, u8)>, _) = match mode {
@@ -392,10 +393,11 @@ fn run() -> Result<(), Box<dyn Error>> {
         if model_path.exists() && !model_path.is_file() {
             return Err(format!("model path is not a file: {}", model_path.display()).into());
         }
-        let was_present = model_path.is_file();
-        let remove = !was_present || spec.remove_after;
-        let result = fetch(&model_path, &spec.url, &spec.sha256, deadline.stop_flag())
-            .and_then(|()| run_model(&run, spec, &model_path, !was_present, &mut output));
+        // A failed fetch counts as this run's: the file was missing, and a partial download may be left.
+        let fetched = fetch(&model_path, &spec.url, &spec.sha256, deadline.stop_flag());
+        let downloaded = !matches!(fetched, Ok(false));
+        let remove = downloaded || spec.remove_after;
+        let result = fetched.and_then(|_| run_model(&run, spec, &model_path, downloaded, &mut output));
 
         let cleanup = if remove { remove_model(&model_path) } else { Ok(()) };
         let error_logged = match &result {
@@ -421,7 +423,7 @@ fn run() -> Result<(), Box<dyn Error>> {
                 "run_id": run.id,
                 "model": spec.name,
                 "model_file": spec.file,
-                "downloaded_for_run": !was_present,
+                "downloaded_for_run": downloaded,
                 "model_removed": remove && cleanup.is_ok(),
                 "status": match (&cleanup, remove) {
                     (Err(_), _) => "failed",
@@ -457,9 +459,12 @@ fn run_model(
     output: &mut BufWriter<File>,
 ) -> Result<(), Box<dyn Error>> {
     let model_size = fs::metadata(model_path)?.len();
-    let model_hash = sha256(model_path)?;
+    let model_hash = sha256(model_path, run.deadline.stop_flag())?;
     if model_hash != spec.sha256 {
         return Err(format!("sha256 {model_hash}, expected {}", spec.sha256).into());
+    }
+    if run.deadline.expired() {
+        return Err("deadline reached before loading the model".into());
     }
     let loading = Instant::now();
     let model = LlamaModel::load_from_file(run.backend, model_path, &LlamaModelParams::default())?;
@@ -485,7 +490,7 @@ fn run_model(
         }
 
         let stats = generate(run, &model, &test, spec, u32::from(repetition))?;
-        let deadline_reached = run.deadline.expired();
+        let deadline_reached = stats.deadline_reached;
         let tokens_per_second = stats.output_tokens as f64 / stats.elapsed.as_secs_f64().max(f64::MIN_POSITIVE);
 
         let row = json!({
@@ -539,7 +544,7 @@ fn run_model(
             spec.name, test.id, repetition, stats.output_tokens, tokens_per_second
         );
 
-        if deadline_reached {
+        if run.deadline.expired() {
             return Ok(());
         }
     }
@@ -554,6 +559,8 @@ struct Generation {
     prompt_read: Duration,
     output_tokens: usize,
     elapsed: Duration,
+    /// Stopped by the deadline, not by the end of the reply or the token limit.
+    deadline_reached: bool,
 }
 
 /// Answers `test` in a fresh context, stopping at the token limit, the end of the reply or the deadline.
@@ -584,7 +591,7 @@ fn generate(
     let add_bos = vocab.should_add_bos() && !text.as_bytes().starts_with(&bos);
     let prompt = vocab.tokenize(text.as_bytes(), add_bos, true);
     let max_tokens = test.max_tokens;
-    if prompt.len() + max_tokens > N_CTX as usize {
+    if max_tokens > (N_CTX as usize).saturating_sub(prompt.len()) {
         return Err(format!("prompt of {} tokens does not fit n_ctx {N_CTX}", prompt.len()).into());
     }
 
@@ -620,7 +627,12 @@ fn generate(
     let mut bytes = Vec::new();
     let mut output_tokens = 0;
     let generating = Instant::now();
-    while output_tokens < max_tokens && !run.deadline.expired() {
+    let mut deadline_reached = false;
+    while output_tokens < max_tokens {
+        if run.deadline.expired() {
+            deadline_reached = true;
+            break;
+        }
         let token = sampler.sample(&ctx, batch.n_tokens() - 1);
         if vocab.is_eog(token) {
             break;
@@ -637,13 +649,15 @@ fn generate(
         prompt_read,
         output_tokens,
         elapsed: generating.elapsed(),
+        deadline_reached,
     })
 }
 
 /// Downloads `url` to `path` unless it exists, into a `.part` file that is renamed once its sha256 matches.
-fn fetch(path: &Path, url: &str, sha256: &str, stop: &AtomicBool) -> Result<(), Box<dyn Error>> {
+/// Returns whether it downloaded the file.
+fn fetch(path: &Path, url: &str, sha256: &str, stop: &AtomicBool) -> Result<bool, Box<dyn Error>> {
     if path.exists() {
-        return Ok(());
+        return Ok(false);
     }
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .timeout_connect(Some(STALL))
@@ -676,7 +690,7 @@ fn fetch(path: &Path, url: &str, sha256: &str, stop: &AtomicBool) -> Result<(), 
         return Err(format!("{}: sha256 {got}, expected {sha256}", path.display()).into());
     }
     fs::rename(&part, path)?;
-    Ok(())
+    Ok(true)
 }
 
 /// Deletes a model of the run with an unfinished download of it; the runner saves no prompt states.
@@ -701,7 +715,8 @@ fn write_record(output: &mut BufWriter<File>, record: &serde_json::Value) -> Res
 /// Reads `PAL_BENCH_TESTS`, keeping the suites in `languages`. The strings live as long as the process.
 fn load_tests(languages: &[&'static str]) -> Result<(Vec<TestCase>, TestSource), Box<dyn Error>> {
     let path = std::env::var_os("PAL_BENCH_TESTS").ok_or("PAL_BENCH_MODE=scored needs PAL_BENCH_TESTS")?;
-    let file: TestFile = serde_json::from_reader(BufReader::new(File::open(&path)?))?;
+    let bytes = fs::read(&path)?;
+    let file: TestFile = serde_json::from_slice(&bytes)?;
     let leak = |s: String| -> &'static str { Box::leak(s.into_boxed_str()) };
     let mut tests = Vec::new();
     let mut ids = std::collections::HashSet::new();
@@ -727,7 +742,7 @@ fn load_tests(languages: &[&'static str]) -> Result<(Vec<TestCase>, TestSource),
             });
         }
     }
-    Ok((tests, TestSource { name: file.name, sha256: sha256(Path::new(&path))? }))
+    Ok((tests, TestSource { name: file.name, sha256: format!("{:x}", Sha256::digest(&bytes)) }))
 }
 
 fn selected_languages() -> Result<Vec<&'static str>, Box<dyn Error>> {
@@ -751,11 +766,15 @@ fn selected_languages() -> Result<Vec<&'static str>, Box<dyn Error>> {
     Ok(languages)
 }
 
-fn sha256(path: &Path) -> Result<String, Box<dyn Error>> {
+/// Ends early with an error once `stop` is set.
+fn sha256(path: &Path, stop: &AtomicBool) -> Result<String, Box<dyn Error>> {
     let mut file = File::open(path)?;
     let mut hash = Sha256::new();
     let mut buffer = vec![0; 1024 * 1024];
     loop {
+        if stop.load(Ordering::Relaxed) {
+            return Err("hashing stopped by the deadline".into());
+        }
         let bytes = file.read(&mut buffer)?;
         if bytes == 0 {
             break;
