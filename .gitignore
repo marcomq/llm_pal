@@ -1,4 +1,5 @@
 /rust/target
+/scripts/llm_bench/target
 /models
 /out
 /build

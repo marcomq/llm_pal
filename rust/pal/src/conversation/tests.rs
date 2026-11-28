@@ -166,6 +166,34 @@ fn a_segment_is_answered_and_its_reply_followed_until_done() {
 }
 
 #[test]
+fn a_typed_line_is_answered_without_speech_recognition() {
+    let t = topics();
+    let (mut c, events) = pal(&t, false);
+    *t.transcript.lock().unwrap() = "must not be used".into();
+    c.handle(Some(Input::from_message(&Input::typed(QUESTION)).unwrap())).unwrap();
+    let LlmRequest::Reply { turn, messages } = LlmRequest::from_message(&next(&t.llm)).unwrap() else {
+        panic!("a reply")
+    };
+    assert_eq!(turn, "turn-1");
+    assert!(messages.last().unwrap().content.starts_with(QUESTION));
+    assert!(matches!(c.phase, Phase::Replying(_)));
+    assert!(matches!(events.try_recv(), Ok(AgentEvent::Heard(line)) if line == QUESTION));
+}
+
+#[test]
+fn a_typed_line_stops_the_running_reply_and_is_answered() {
+    let t = topics();
+    let (mut c, _events) = pal(&t, false);
+    say(&t, &mut c, QUESTION, Event::Segment, true);
+    assert_eq!(reply_of(next(&t.llm)), "turn-1");
+    report(&mut c, Spoken::Said { turn: "turn-1".into(), text: "Feuer und Eis.".into(), at: Instant::now() });
+    c.handle(Some(Input::Typed("Und in Italien?".into()))).unwrap();
+    assert_eq!(to_speaker(&t.speech), ("turn-1".into(), ToSpeaker::Stop));
+    assert!(matches!(LlmRequest::from_message(&next(&t.llm)).unwrap(), LlmRequest::Prefill { .. }));
+    assert_eq!(reply_of(next(&t.llm)), "turn-2");
+}
+
+#[test]
 fn a_reply_to_a_pause_is_held_until_the_segment_ends() {
     let t = topics();
     let (mut c, _events) = pal(&t, false);

@@ -100,6 +100,29 @@ text = "…"
 horizontal_alignment = 1
 vertical_alignment = 1
 
+[node name="TypeButton" type="Label" parent="."]
+layout_mode = 1
+offset_left = 140.0
+offset_right = 220.0
+offset_bottom = 80.0
+theme_override_colors/font_color = Color(0.6, 0.15, 0.1, 1)
+theme_override_font_sizes/font_size = 32
+text = "T"
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="Typed" type="LineEdit" parent="."]
+visible = false
+layout_mode = 1
+anchors_preset = 10
+anchor_right = 1.0
+offset_left = 8.0
+offset_top = 8.0
+offset_right = -8.0
+offset_bottom = 72.0
+theme_override_font_sizes/font_size = 28
+max_length = 500
+
 [node name="Party" type="Label" parent="."]
 layout_mode = 1
 offset_right = 140.0

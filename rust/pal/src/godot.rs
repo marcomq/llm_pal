@@ -39,7 +39,7 @@ pub struct PalNode {
     /// The stopped agent until its thread has finished, and a `start` (model dir) waiting for that.
     stopping: Option<Agent>,
     pending_start: Option<GString>,
-    /// Pocket TTS catalog voice for `language`; takes effect on `start`.
+    /// Pocket TTS voice, spoken in `language`; takes effect on `start`.
     #[export]
     pocket_voice: GString,
     /// Fish Audio speaks when both key and voice ID are set; takes effect on `start`.
@@ -84,6 +84,9 @@ pub struct PalNode {
     llm_remote_model: GString,
     #[export]
     llm_api_key: GString,
+    /// How long the server's model may think, in the provider's words; empty sends nothing.
+    #[export]
+    llm_effort: GString,
     /// The local model answers when the server fails; it is loaded only then.
     #[export]
     llm_fallback: bool,
@@ -105,10 +108,10 @@ impl INode for PalNode {
             fish_api_key: GString::new(),
             fish_voice_id: GString::new(),
             fish_model: GString::new(),
-            language: "de".into(),
+            language: "en".into(),
             barge_in: true,
             smart_turn: true,
-            llm_model: "Qwen3.5-2B-Q4_K_M.gguf".into(),
+            llm_model: "granite-3.3-2b-instruct-Q4_K_M.gguf".into(),
             clear_llm_cache: false,
             persona_file: GString::new(),
             stt_model: "parakeet-tdt-0.6b-v3".into(),
@@ -117,6 +120,7 @@ impl INode for PalNode {
             llm_url: GString::new(),
             llm_remote_model: GString::new(),
             llm_api_key: GString::new(),
+            llm_effort: GString::new(),
             llm_fallback: false,
             party_mode: false,
             base,
@@ -207,6 +211,7 @@ impl PalNode {
                 url: self.llm_url.to_string(),
                 model: self.llm_remote_model.to_string(),
                 api_key: self.llm_api_key.to_string(),
+                effort: self.llm_effort.to_string(),
             }),
             None if provider == "local" => None,
             None => {
@@ -269,7 +274,7 @@ impl PalNode {
         Language::from_code(&language.to_string()).map(Character::template).unwrap_or_default().as_str().into()
     }
 
-    /// Deletes a catalog LLM other than the one in use, with its cache files.
+    /// Deletes a catalog LLM or one of one's own other than the one in use, with its cache files.
     #[func]
     fn remove_llm(&self, model_dir: GString, name: GString) -> bool {
         if name == self.llm_model {
@@ -286,6 +291,26 @@ impl PalNode {
             return State::Loading as i32;
         }
         self.agent.as_ref().map_or(State::Stopped, Agent::state) as i32
+    }
+
+    /// Bytes of the running model download so far, 0 without one.
+    #[func]
+    fn downloaded_bytes(&self) -> i64 {
+        self.agent.as_ref().map_or(0, |agent| agent.download().0 as i64)
+    }
+
+    /// Size of the running model download, 0 without one or if a server doesn't tell it.
+    #[func]
+    fn download_bytes(&self) -> i64 {
+        self.agent.as_ref().map_or(0, |agent| agent.download().1 as i64)
+    }
+
+    /// Answers a typed line as if the user had said it.
+    #[func]
+    fn type_line(&self, text: GString) {
+        if let Some(agent) = &self.agent {
+            agent.type_line(&text.to_string());
+        }
     }
 
     /// True while the user's speech is heard.

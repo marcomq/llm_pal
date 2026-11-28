@@ -10,6 +10,7 @@ the user by name (default "Michael", spoken "Maikel"). Rust workspace in `rust/`
 |---|---|
 | `rust/pal` | The app, one crate. `godot.rs` `PalNode` (entry), `conversation/` the main loop, `hear/` microphone → text, `think/` persona and LLM, `speak/` text → sound, `transport.rs` the mq-bridge connections, `downloader.rs` models, `platform/` Android vs. desktop |
 | `rust/pal-tts` | Kyutai Pocket TTS, copied from kyutai-labs/pocket-tts. Don't reformat or edit except for marked "pal-tts change" spots |
+| `scripts/llm_bench` | Separate crate `llm-bench`, not in the workspace or the APK, no Pal dependency: benchmark of local GGUF models through llama.cpp. Manifests, results and report scripts in the same folder |
 | `godot/` | UI (`main.gd`, `main.tscn`), settings form (`settings.gd`), KITT shader |
 | `generate_voice` | Separate crate `pal-voice`, not in the workspace or the APK: makes a voice of one's own from a recording. Needs Kyutai's gated cloning model |
 
@@ -87,33 +88,35 @@ Topics, routes and reports: the diagram at the top of `transport.rs`. What it do
   `correlation_id` = turn, `mqb.stream.index`, `mqb.stream.end`; the last token's `mqb.stream.status` is
   `complete`, `error` (payload = error text) or `cancelled`.
 - `pal_tick` needs batch size 1, else `static` fills the whole batch at once.
-- Reports reach `pal.inbox` through a `Report` closure inside the handlers (mq-bridge 1.6 has no `emit_to`).
+- `transport::deploy` declares all routes as one `Topology`: they start in declaration order and stop in the explicit
+  `stop_order` after a failed start. The normal end stops them by name (`Transport::drop`, `stop_inbox`).
+- Reports reach `pal.inbox` through a `Report` closure over a `Publisher` (`blocking_send`). A failed send is only
+  logged, so a report never fails a handler.
 - The memory topics live as long as the process: `transport::deploy` empties them, so a restarted agent doesn't read
   what the stopped one left.
 - STT is a `Caller` on an endpoint, not a route; `pal_mic` is a custom input endpoint, usable in any route.
-- mq-bridge `1.6.0` from crates.io (any 1.x ≥ 1.6.0; also used by mq-bridge-onnx). Never a local path or git
+- mq-bridge `1.7.0` from crates.io (any 1.x ≥ 1.7.0; also used by mq-bridge-onnx). Never a local path or git
   checkout. Don't change mq-bridge itself. Ideas for later (deferred): `lookup` middleware for
   enrichment, `switch`, embeddings + qdrant.
 - **Upstream candidates** (gaps worked around here; propose to mq-bridge, then simplify Pal):
-  `ctx.emit_to(topic)` or `HandlerContext::runtime()` (would replace the `Report` closure and let one topology
-  function hand the conversation its outputs through `ctx`); an `interval` endpoint (instead of `static` +
-  `limiter` for `pal_tick`); a streaming request/reply client (instead of `transport::StreamCall`); `Route::stop`
-  that drains queued messages (`conversation_handler` then needs no `PocketSpeaker` clone to cut the voice off).
+  an `interval` endpoint (instead of `static` + `limiter` for `pal_tick`); `Route::stop` that drains queued
+  messages (`conversation_handler` then needs no `PocketSpeaker` clone to cut the voice off).
 
 ## LLM ("brain")
 
 - `transport::Parts`: `model` (local, loaded when there is no server or `AgentConfig.fallback`) and `server`
   (`AgentConfig.remote`), filled in `conversation::load`; without a server, the model reads the persona's context
   while loading. The local model and its session live on their own thread (`brain::Model`).
-- `local_llm.rs`: `LocalLlm` via llama.cpp (default model Qwen3.5 2B GGUF), `LlmSession::reply`. The model's thread runs
+- `local_llm.rs`: `LocalLlm` via llama.cpp (default model by RAM: Gemma 4 E2B from ~6 GB, else Granite 3.3 2B; `Settings.default_model`), `LlmSession::reply`. The prompt format
+  (`Format`: ChatML, Llama 3, SmolLM3, Gemma 3, Gemma 4, Granite, Phi, Falcon) follows from the model's architecture and vocabulary. The model's thread runs
   at nice 10 on Android (`platform::background_thread`); llama.cpp's workers inherit it, so TTS and audio come first.
-  Qwen3.5 has recurrent layers: the cache goes back only to checkpoints (after the fixed messages, the last prefill,
+  Models with recurrent layers (such as Qwen3.5, no longer offered): the cache goes back only to checkpoints (after the fixed messages, the last prefill,
   the last two read-aheads or prompts). A checkpoint inside a prompt would split its reading into two decodes,
   ~80 ms more on Metal, so read-aheads make them outside the reply's time.
-- Thread counts for llama.cpp, Pocket TTS (xn), Parakeet and Smart Turn: `cpu::fast_cores()`.
+- Thread counts for Pocket TTS (xn), Parakeet and Smart Turn: `cpu::fast_cores()`; for llama.cpp `cpu::llm_threads()`, only the biggest cores (2 on the Pixel 6a, ~1.5× faster than 4).
 - `remote_llm.rs`: builds the mq-bridge endpoint: `openai_chat` with `messages_from_payload` for Ollama and OpenAI,
   the streaming `http_bulk` recipe for Anthropic's `/messages`. Both stream to `pal.llm.tokens` (`stream_to`) and
-  stop on `pal.llm.cancel` (`cancel_from`, sent by `Transport::cancel`). `brain::Server` reads them back (`transport::StreamCall`)
+  stop on `pal.llm.cancel` (`cancel_from`, sent by `Transport::cancel`). `brain::Server` reads them back (mq-bridge's `StreamCaller`)
   and the `pal_llm` handler passes them on to `pal.speech`. Timeout: 30 s per silence of the server, no overall timeout (streams may be long).
 - reqwest's platform verifier is not initialised on Android, so `remote_llm.rs` sets `tls.ca_file = "$.bundled"`
   (mq-bridge's built-in Mozilla roots) for every server.
@@ -128,7 +131,7 @@ thread looks every 20 ms and reports to `pal.inbox`: `Spoken::Audible { turn, at
 silent (`speaking` = `MicLink::output_active`).
 Weights are quantized to q8_0 at load (`pal-tts/src/lib.rs`, `type Backend`): 2.4× faster than f32 on the Mac.
 `numbers.rs` writes digits as words (number words per language in `think/language/`), `leveler.rs` evens out loudness, `voice_filter.rs` adds KITT's speaker sound.
-Voice per language from the settings (`Settings.VOICES`; default the first voice of one's own, else `juergen`); `downloader.rs` lists the same voices.
+One voice for both languages from the settings (`voice/name`, `Settings.VOICES`; default the first voice of one's own, else `juergen`), loaded from the active language's file; a voice of one's own missing in that language gives way to the default. `downloader.rs` lists the same voices.
 Optional Fish Audio (`speak/fish.rs`, `AgentConfig.fish`), off until chosen as voice source (`voice/source`) in the settings: the user's own key, voice ID and model from the settings,
 never an environment variable and never a prefilled voice ID. It replaces only the generation; Pocket stays loaded and
 says a sentence Fish failed on (from its start, also after a break mid-sentence), and speaks alone for 60 s after a failure. Always send a model: Fish bills an
@@ -142,23 +145,29 @@ explicit consent; never add recordings or cloned voices to the repository or the
 ## Godot
 
 - `PalNode` (`godot.rs`): vars `user_name`, `llm_provider` (`local`/`ollama`/`openai`/`anthropic`),
-  `llm_url`, `llm_remote_model`, `llm_api_key`, `llm_fallback`, `fish_api_key`, `fish_voice_id`, `fish_model`,
+  `llm_url`, `llm_remote_model`, `llm_effort`, `llm_api_key`, `llm_fallback`, `fish_api_key`, `fish_voice_id`, `fish_model`,
   `smart_turn`, `barge_in`, `party_mode`. Signals:
   `ready_to_listen`, `heard`, `said`, `turn_done`, `interrupted`, `ignored`, `failed`, `reply_failed`.
+- Typed lines: the T label or key T opens a field; `PalNode.type_line` → `Agent::type_line` → `Input::Typed` on
+  `pal.inbox`. No STT and no tags; it ends a running reply like words after a barge-in.
 - `main.gd`: subtitles (`You` above the voice box, `Reply` below, without prosody tags), brighter red while said. While nothing moves it draws
   nothing and runs at `IDLE_FPS` (`low_processor_mode`); anything animated must count as `moving` in `_process`.
   `_start()` copies settings onto `PalNode`. The "…" label or key S opens the settings form; the P0/P1
   label or key P switches party mode (`user/party`).
 - `settings.gd` (`Settings`): saves to `user://settings.cfg` (sections `user` incl. `party`, `voice`, `persona`, `fish`, `llm`); saving restarts Pal. An empty
   URL means the provider default (in `settings.gd` and `remote_llm.rs`). An empty model is replaced by the provider's
-  model default from `settings.gd` only; `remote_llm.rs` has no model default and sends the model as given.
+  model default from `settings.gd` only; `remote_llm.rs` has no model default and sends the model as given. The same
+  goes for the effort (`llm/effort`), except that an own OpenAI model gets none, as its accepted values vary.
 - Local models: `Settings.LOCAL_MODELS`, same files as `downloader.rs`, whose `ON_REQUEST` models are fetched only once
   chosen (`llm/local_model`). A new one is on trial (`llm/trying_from`): `main.gd` goes back if it fails or the app
   died before `ready_to_listen`. `llm/replaced` (the old model, or the new one if it failed) makes it ask before
   `PalNode.remove_llm` once Pal is ready. `Settings.fits_ram` disables models too large for the device.
-- Characters: `think/character.rs`, files in `personas/<de|en>/<name>.txt` in the model folder, chosen per language
-  (`persona/<lang>`, empty = built-in). A file gets the language's `Profile.tag_rule` added and none of KITT's texts.
-  `PalNode.persona_file`; a file that can't be read falls back to the built-in character (`persona_error`). The
+- Own models: any GGUF the user loads in the settings is copied (on a thread, via `.part`) to `llm/` in the model
+  folder and chosen as `llm/<file>.gguf`, on trial like a catalog model. Pal neither lists nor downloads models outside
+  the catalog (e.g. Llama), so their licenses bind only the user. An own model whose file is gone gives way to the default.
+- Characters: `think/character.rs`, files in `personas/<de|en>/<name>.txt` in the model folder, one choice for both languages
+  (`persona/name`, empty = built-in), loaded from the active language's file. A file gets the language's `Profile.tag_rule` added and none of KITT's texts.
+  `PalNode.persona_file`; a file that is missing in that language or can't be read falls back to the built-in character (`persona_error`). The
   built-in KITT is such a file too (`think/language/kitt_<lang>.txt`). Changing a model or character sets
   `llm/cache_stale`: the next start deletes all `.state` files (`remove_llm_caches`), a language switch doesn't.
 - Environment: `PAL_MODELS` (models folder), `PAL_LLM` (GGUF file), `PAL_SMART_TURN=0`, `PAL_BARGE_IN=0`,

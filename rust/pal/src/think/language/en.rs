@@ -6,7 +6,10 @@ pub(super) const PROFILE: Profile = Profile {
     code: "en",
     pocket_model: "english",
     warm_up: "Hello.",
-    tag_rule: "Square brackets at the end say how something was said, for example [loud] or [question]. \
+    tag_rule: "What you hear comes from speech recognition and may contain misheard words or punctuation. \
+Read it like a phonetic transcript: if a word makes no sense, take the similar-sounding one that fits, and don't mention the mistake. \
+If you can't make sense of it at all, briefly ask. \
+Square brackets at the end say how something was said, for example [loud] or [question]. \
 That is only a hint about the tone: answer the sentence before it, not the hint. \
 Never repeat it and never write square brackets yourself.",
     character: include_str!("kitt_en.txt"),

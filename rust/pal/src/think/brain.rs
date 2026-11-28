@@ -10,17 +10,18 @@ use std::time::Duration;
 
 use mq_bridge::blocking_handler::{BlockingHandler, HandlerContext};
 use mq_bridge::models::Endpoint;
-use mq_bridge::{CanonicalMessage, Handled, HandlerError};
+use mq_bridge::{CanonicalMessage, Handled, HandlerError, StreamCaller};
+use tokio::runtime::Handle;
 
 use crate::think::local_llm::{LlmConfig, LocalLlm, Message};
 use crate::think::remote_llm::RemoteConfig;
-use crate::transport::{End, LlmRequest, Report, Spoken, StreamCall, Token, failed, trace_received};
+use crate::transport::{End, LlmRequest, Report, Spoken, Token, failed, trace_received};
 use crate::{Error, Result};
 
 /// How often a running reply checks whether its turn was cancelled.
 const CANCEL_POLL: Duration = Duration::from_millis(50);
 const CAPACITY: usize = 1024;
-/// The server's tokens, read by the model stage before they go on to `pal.speech`.
+/// The server's tokens, read by the `pal_llm` handler before they go on to `pal.speech`.
 pub const SERVER_TOKENS: &str = "pal.llm.tokens";
 pub const SERVER_CANCEL: &str = "pal.llm.cancel";
 
@@ -159,14 +160,15 @@ impl Model {
 /// A reply server behind mq-bridge: its tokens come back on `SERVER_TOKENS`.
 pub struct Server {
     config: RemoteConfig,
-    call: StreamCall,
+    call: StreamCaller,
+    runtime: Handle,
 }
 
 impl Server {
     pub async fn start(config: RemoteConfig) -> mq_bridge::anyhow::Result<Self> {
         let tokens = Endpoint::new_memory(SERVER_TOKENS, CAPACITY);
         let endpoint = config.endpoint(&tokens, &Endpoint::new_memory(SERVER_CANCEL, CAPACITY))?;
-        Ok(Self { call: StreamCall::new("pal_llm_server", endpoint, &tokens).await?, config })
+        Ok(Self { call: StreamCaller::new("pal_llm_server", endpoint).await?, config, runtime: Handle::current() })
     }
 
     /// Asks for a reply and passes its text on; returns the last token, which says how the reply ended.
@@ -177,11 +179,21 @@ impl Server {
         ctx: &HandlerContext,
     ) -> std::result::Result<Token, HandlerError> {
         let request = CanonicalMessage::from(self.config.payload(messages));
-        self.call.call(turn, request, |piece| ctx.emit(piece))
+        let mut reply = self.runtime.block_on(self.call.start(turn, request)).map_err(failed)?;
+        while let Some(token) = self.runtime.block_on(reply.next()) {
+            let message = token.into_message();
+            trace_received("pal_llm_server", &message);
+            let token = Token::from_message(&message);
+            if token.end.is_some() {
+                return Ok(token);
+            }
+            ctx.emit(message)?;
+        }
+        Err(failed("the reply ended without its last token"))
     }
 }
 
-/// The `pal_llm` stage: messages in, tokens out. Reports `Prefilled` after each prefill.
+/// The `pal_llm` handler: messages in, tokens out. Reports `Prefilled` after each prefill.
 pub fn handler(model: Option<Model>, mut server: Option<Server>, report: Report) -> impl BlockingHandler {
     move |msg: CanonicalMessage, ctx: &HandlerContext| {
         trace_received("pal_llm", &msg);

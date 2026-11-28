@@ -6,7 +6,10 @@ pub(super) const PROFILE: Profile = Profile {
     code: "de",
     pocket_model: "german",
     warm_up: "Hallo.",
-    tag_rule: "In eckigen Klammern am Ende steht, wie etwas gesagt wurde, zum Beispiel [laut] oder [Frage]. \
+    tag_rule: "Was du hörst, kommt aus einer Spracherkennung und kann falsch erkannte Wörter oder Satzzeichen enthalten. \
+Lies es wie Lautschrift: Ergibt ein Wort keinen Sinn, nimm das ähnlich klingende, das passt, und erwähne den Fehler nicht. \
+Verstehst du gar nichts, frag kurz nach. \
+In eckigen Klammern am Ende steht, wie etwas gesagt wurde, zum Beispiel [laut] oder [Frage]. \
 Das ist nur ein Hinweis auf den Tonfall: Antworte auf den Satz davor, nicht auf den Hinweis. \
 Wiederhole ihn nie und schreibe selbst nie eckige Klammern.",
     character: include_str!("kitt_de.txt"),

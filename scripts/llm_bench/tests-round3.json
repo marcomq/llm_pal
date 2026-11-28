@@ -1,0 +1,1946 @@
+{
+ "name": "round3",
+ "suites": [
+  {
+   "language": "de",
+   "category": "knowledge",
+   "system": "Beantworte die Frage auf Deutsch, nur mit der Antwort, so kurz wie möglich.",
+   "max_output_tokens": 64,
+   "items": [
+    {
+     "id": "de-knowledge-01",
+     "prompt": "Was ist die Hauptstadt Australiens?",
+     "expect": {
+      "any_word": [
+       "canberra"
+      ]
+     }
+    },
+    {
+     "id": "de-knowledge-02",
+     "prompt": "Was ist das chemische Symbol für Gold?",
+     "expect": {
+      "any_word": [
+       "Au"
+      ],
+      "case_sensitive": true
+     }
+    },
+    {
+     "id": "de-knowledge-03",
+     "prompt": "Welcher ist der größte Planet unseres Sonnensystems?",
+     "expect": {
+      "any_word": [
+       "jupiter"
+      ]
+     }
+    },
+    {
+     "id": "de-knowledge-04",
+     "prompt": "Wer schrieb „Romeo und Julia“?",
+     "expect": {
+      "any_word": [
+       "shakespeare"
+      ]
+     }
+    },
+    {
+     "id": "de-knowledge-05",
+     "prompt": "Bei wie viel Grad Celsius siedet Wasser auf Meereshöhe?",
+     "expect": {
+      "any_word": [
+       "100"
+      ]
+     }
+    },
+    {
+     "id": "de-knowledge-06",
+     "prompt": "Welches Element hat die Ordnungszahl 1?",
+     "expect": {
+      "any_word": [
+       "wasserstoff"
+      ]
+     }
+    },
+    {
+     "id": "de-knowledge-07",
+     "prompt": "In welchem Jahr endete der Zweite Weltkrieg?",
+     "expect": {
+      "any_word": [
+       "1945"
+      ]
+     }
+    },
+    {
+     "id": "de-knowledge-08",
+     "prompt": "Was ist die Hauptstadt Kanadas?",
+     "expect": {
+      "any_word": [
+       "ottawa"
+      ]
+     }
+    },
+    {
+     "id": "de-knowledge-09",
+     "prompt": "Wie viele Seiten hat ein Sechseck?",
+     "expect": {
+      "any_word": [
+       "6",
+       "sechs"
+      ]
+     }
+    },
+    {
+     "id": "de-knowledge-10",
+     "prompt": "Wer hat die Mona Lisa gemalt?",
+     "expect": {
+      "any_word": [
+       "leonardo",
+       "da vinci"
+      ]
+     }
+    },
+    {
+     "id": "de-knowledge-11",
+     "prompt": "Was ist die Quadratwurzel von 144?",
+     "expect": {
+      "any_word": [
+       "12",
+       "zwolf"
+      ]
+     }
+    },
+    {
+     "id": "de-knowledge-12",
+     "prompt": "Welches Organ pumpt das Blut durch den Körper?",
+     "expect": {
+      "any_word": [
+       "herz"
+      ]
+     }
+    },
+    {
+     "id": "de-knowledge-13",
+     "prompt": "Wie heißt die Währung Japans?",
+     "expect": {
+      "any_word": [
+       "yen"
+      ]
+     }
+    },
+    {
+     "id": "de-knowledge-14",
+     "prompt": "Was ist die kleinste Primzahl?",
+     "expect": {
+      "any_word": [
+       "2",
+       "zwei"
+      ]
+     }
+    },
+    {
+     "id": "de-knowledge-15",
+     "prompt": "Wer entwickelte die Relativitätstheorie?",
+     "expect": {
+      "any_word": [
+       "einstein"
+      ]
+     }
+    },
+    {
+     "id": "de-knowledge-16",
+     "prompt": "Wie heißt der höchste Berg der Erde?",
+     "expect": {
+      "any_word": [
+       "everest"
+      ]
+     }
+    },
+    {
+     "id": "de-knowledge-17",
+     "prompt": "Wie viele Minuten hat ein Tag?",
+     "expect": {
+      "any_word": [
+       "1440"
+      ]
+     }
+    },
+    {
+     "id": "de-knowledge-18",
+     "prompt": "Was ist die Hauptstadt Brasiliens?",
+     "expect": {
+      "any_word": [
+       "brasilia"
+      ]
+     }
+    },
+    {
+     "id": "de-knowledge-19",
+     "prompt": "Welche Sprache hat die meisten Muttersprachler?",
+     "expect": {
+      "any_word": [
+       "mandarin",
+       "chinesisch"
+      ]
+     }
+    },
+    {
+     "id": "de-knowledge-20",
+     "prompt": "Wie lautet die chemische Formel von Kochsalz?",
+     "expect": {
+      "any_word": [
+       "nacl"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "language": "de",
+   "category": "grammar",
+   "system": "Korrigiere Grammatik und Rechtschreibung des Satzes. Antworte nur mit dem korrigierten Satz, ohne Erklärung. Ist er schon korrekt, wiederhole ihn unverändert.",
+   "max_output_tokens": 128,
+   "items": [
+    {
+     "id": "de-grammar-01",
+     "prompt": "Gestern ich habe mit meine Freunde einen Film gesehen.",
+     "expect": {
+      "correction": [
+       "Gestern habe ich mit meinen Freunden einen Film gesehen."
+      ]
+     }
+    },
+    {
+     "id": "de-grammar-02",
+     "prompt": "Obwohl es stark regnete, aber wir gingen spazieren.",
+     "expect": {
+      "correction": [
+       "Obwohl es stark regnete, gingen wir spazieren."
+      ]
+     }
+    },
+    {
+     "id": "de-grammar-03",
+     "prompt": "Ich freue mich auf den Urlaub, weil ich kann endlich ausschlafen.",
+     "expect": {
+      "correction": [
+       "Ich freue mich auf den Urlaub, weil ich endlich ausschlafen kann."
+      ]
+     }
+    },
+    {
+     "id": "de-grammar-04",
+     "prompt": "Kannst du mir sagen, wo ist der Bahnhof?",
+     "expect": {
+      "correction": [
+       "Kannst du mir sagen, wo der Bahnhof ist?"
+      ]
+     }
+    },
+    {
+     "id": "de-grammar-05",
+     "prompt": "Das Auto, das ich gestern gekauft habe, sind sehr schnell.",
+     "expect": {
+      "correction": [
+       "Das Auto, das ich gestern gekauft habe, ist sehr schnell."
+      ]
+     }
+    },
+    {
+     "id": "de-grammar-06",
+     "prompt": "Ich habe gestern nach Berlin gefahren.",
+     "expect": {
+      "correction": [
+       "Ich bin gestern nach Berlin gefahren."
+      ]
+     }
+    },
+    {
+     "id": "de-grammar-07",
+     "prompt": "Er ist größer wie sein Bruder.",
+     "expect": {
+      "correction": [
+       "Er ist größer als sein Bruder."
+      ]
+     }
+    },
+    {
+     "id": "de-grammar-08",
+     "prompt": "Wir treffen uns am Montag in den Park.",
+     "expect": {
+      "correction": [
+       "Wir treffen uns am Montag im Park."
+      ]
+     }
+    },
+    {
+     "id": "de-grammar-09",
+     "prompt": "Ich gebe die Buch meiner Schwester.",
+     "expect": {
+      "correction": [
+       "Ich gebe das Buch meiner Schwester.",
+       "Ich gebe meiner Schwester das Buch."
+      ]
+     }
+    },
+    {
+     "id": "de-grammar-10",
+     "prompt": "Die Kinder spielt im Garten, während die Eltern kochen.",
+     "expect": {
+      "correction": [
+       "Die Kinder spielen im Garten, während die Eltern kochen."
+      ]
+     }
+    },
+    {
+     "id": "de-grammar-11",
+     "prompt": "Wenn ich mehr Zeit hätte, ich würde mehr lesen.",
+     "expect": {
+      "correction": [
+       "Wenn ich mehr Zeit hätte, würde ich mehr lesen."
+      ]
+     }
+    },
+    {
+     "id": "de-grammar-12",
+     "prompt": "Sie hat sich für das Geschenk sehr gefreut.",
+     "expect": {
+      "correction": [
+       "Sie hat sich über das Geschenk sehr gefreut.",
+       "Sie hat sich sehr über das Geschenk gefreut."
+      ]
+     }
+    },
+    {
+     "id": "de-grammar-13",
+     "prompt": "Nachdem wir gegessen hatten, gingen wir ins Kino.",
+     "expect": {
+      "unchanged": true
+     }
+    },
+    {
+     "id": "de-grammar-14",
+     "prompt": "Ich weiß nicht, ob er morgen kommt.",
+     "expect": {
+      "unchanged": true
+     }
+    },
+    {
+     "id": "de-grammar-15",
+     "prompt": "Trotz des Regens fand das Konzert statt.",
+     "expect": {
+      "unchanged": true
+     }
+    }
+   ]
+  },
+  {
+   "language": "de",
+   "category": "instructions",
+   "system": "Befolge die Anweisung genau. Antworte auf Deutsch.",
+   "max_output_tokens": 160,
+   "items": [
+    {
+     "id": "de-instructions-01",
+     "prompt": "Antworte in genau zwei Sätzen: Du hast gerade deinen Zug verpasst. Was machst du jetzt?",
+     "expect": {
+      "sentences": 2
+     }
+    },
+    {
+     "id": "de-instructions-02",
+     "prompt": "Nenne drei Obstsorten als Liste, jede Zeile beginnt mit \"- \". Schreibe sonst nichts.",
+     "expect": {
+      "bullets": 3
+     }
+    },
+    {
+     "id": "de-instructions-03",
+     "prompt": "Beschreibe dein ideales Wochenende in höchstens 15 Wörtern.",
+     "expect": {
+      "max_words": 15
+     }
+    },
+    {
+     "id": "de-instructions-04",
+     "prompt": "Schreibe einen Satz über das Meer, der das Wort \"blau\" enthält.",
+     "expect": {
+      "sentences": 1,
+      "must_include": [
+       ["blau", "blaue", "blauen", "blauer", "blaues", "blauem"]
+      ]
+     }
+    },
+    {
+     "id": "de-instructions-05",
+     "prompt": "Antworte nur mit Ja oder Nein: Ist die Erde rund?",
+     "expect": {
+      "one_of": [
+       "ja"
+      ]
+     }
+    },
+    {
+     "id": "de-instructions-06",
+     "prompt": "Schreibe alles in Kleinbuchstaben: Was ist deine Lieblingsjahreszeit und warum?",
+     "expect": {
+      "lowercase": true
+     }
+    }
+   ]
+  },
+  {
+   "language": "en",
+   "category": "knowledge",
+   "system": "Answer the question in English with only the answer, as briefly as possible.",
+   "max_output_tokens": 64,
+   "items": [
+    {
+     "id": "en-knowledge-01",
+     "prompt": "What is the capital of Australia?",
+     "expect": {
+      "any_word": [
+       "canberra"
+      ]
+     }
+    },
+    {
+     "id": "en-knowledge-02",
+     "prompt": "What is the chemical symbol for gold?",
+     "expect": {
+      "any_word": [
+       "Au"
+      ],
+      "case_sensitive": true
+     }
+    },
+    {
+     "id": "en-knowledge-03",
+     "prompt": "Which is the largest planet in our solar system?",
+     "expect": {
+      "any_word": [
+       "jupiter"
+      ]
+     }
+    },
+    {
+     "id": "en-knowledge-04",
+     "prompt": "Who wrote \"Romeo and Juliet\"?",
+     "expect": {
+      "any_word": [
+       "shakespeare"
+      ]
+     }
+    },
+    {
+     "id": "en-knowledge-05",
+     "prompt": "At how many degrees Celsius does water boil at sea level?",
+     "expect": {
+      "any_word": [
+       "100"
+      ]
+     }
+    },
+    {
+     "id": "en-knowledge-06",
+     "prompt": "Which element has atomic number 1?",
+     "expect": {
+      "any_word": [
+       "hydrogen"
+      ]
+     }
+    },
+    {
+     "id": "en-knowledge-07",
+     "prompt": "In which year did the Second World War end?",
+     "expect": {
+      "any_word": [
+       "1945"
+      ]
+     }
+    },
+    {
+     "id": "en-knowledge-08",
+     "prompt": "What is the capital of Canada?",
+     "expect": {
+      "any_word": [
+       "ottawa"
+      ]
+     }
+    },
+    {
+     "id": "en-knowledge-09",
+     "prompt": "How many sides does a hexagon have?",
+     "expect": {
+      "any_word": [
+       "6",
+       "six"
+      ]
+     }
+    },
+    {
+     "id": "en-knowledge-10",
+     "prompt": "Who painted the Mona Lisa?",
+     "expect": {
+      "any_word": [
+       "leonardo",
+       "da vinci"
+      ]
+     }
+    },
+    {
+     "id": "en-knowledge-11",
+     "prompt": "What is the square root of 144?",
+     "expect": {
+      "any_word": [
+       "12",
+       "twelve"
+      ]
+     }
+    },
+    {
+     "id": "en-knowledge-12",
+     "prompt": "Which organ pumps blood through the body?",
+     "expect": {
+      "any_word": [
+       "heart"
+      ]
+     }
+    },
+    {
+     "id": "en-knowledge-13",
+     "prompt": "What is the currency of Japan?",
+     "expect": {
+      "any_word": [
+       "yen"
+      ]
+     }
+    },
+    {
+     "id": "en-knowledge-14",
+     "prompt": "What is the smallest prime number?",
+     "expect": {
+      "any_word": [
+       "2",
+       "two"
+      ]
+     }
+    },
+    {
+     "id": "en-knowledge-15",
+     "prompt": "Who developed the theory of relativity?",
+     "expect": {
+      "any_word": [
+       "einstein"
+      ]
+     }
+    },
+    {
+     "id": "en-knowledge-16",
+     "prompt": "What is the highest mountain on Earth?",
+     "expect": {
+      "any_word": [
+       "everest"
+      ]
+     }
+    },
+    {
+     "id": "en-knowledge-17",
+     "prompt": "How many minutes are in a day?",
+     "expect": {
+      "any_word": [
+       "1440"
+      ]
+     }
+    },
+    {
+     "id": "en-knowledge-18",
+     "prompt": "What is the capital of Brazil?",
+     "expect": {
+      "any_word": [
+       "brasilia"
+      ]
+     }
+    },
+    {
+     "id": "en-knowledge-19",
+     "prompt": "Which language has the most native speakers?",
+     "expect": {
+      "any_word": [
+       "mandarin",
+       "chinese"
+      ]
+     }
+    },
+    {
+     "id": "en-knowledge-20",
+     "prompt": "What is the chemical formula of table salt?",
+     "expect": {
+      "any_word": [
+       "nacl"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "language": "en",
+   "category": "grammar",
+   "system": "Correct the grammar and spelling of the sentence. Reply with the corrected sentence only, without explanation. If it is already correct, repeat it unchanged.",
+   "max_output_tokens": 128,
+   "items": [
+    {
+     "id": "en-grammar-01",
+     "prompt": "Yesterday I has went to the store, but it were closed.",
+     "expect": {
+      "correction": [
+       "Yesterday I went to the store, but it was closed.",
+       "Yesterday I had gone to the store, but it was closed."
+      ]
+     }
+    },
+    {
+     "id": "en-grammar-02",
+     "prompt": "Although it was raining heavily, but we went for a walk.",
+     "expect": {
+      "correction": [
+       "Although it was raining heavily, we went for a walk."
+      ]
+     }
+    },
+    {
+     "id": "en-grammar-03",
+     "prompt": "She don't like coffee.",
+     "expect": {
+      "correction": [
+       "She doesn't like coffee.",
+       "She does not like coffee."
+      ]
+     }
+    },
+    {
+     "id": "en-grammar-04",
+     "prompt": "There is many reasons to stay.",
+     "expect": {
+      "correction": [
+       "There are many reasons to stay."
+      ]
+     }
+    },
+    {
+     "id": "en-grammar-05",
+     "prompt": "I have seen him yesterday.",
+     "expect": {
+      "correction": [
+       "I saw him yesterday."
+      ]
+     }
+    },
+    {
+     "id": "en-grammar-06",
+     "prompt": "Each of the students have a book.",
+     "expect": {
+      "correction": [
+       "Each of the students has a book."
+      ]
+     }
+    },
+    {
+     "id": "en-grammar-07",
+     "prompt": "He is more taller than his brother.",
+     "expect": {
+      "correction": [
+       "He is taller than his brother."
+      ]
+     }
+    },
+    {
+     "id": "en-grammar-08",
+     "prompt": "If I would have known, I would have come.",
+     "expect": {
+      "correction": [
+       "If I had known, I would have come."
+      ]
+     }
+    },
+    {
+     "id": "en-grammar-09",
+     "prompt": "Me and him went to the cinema.",
+     "expect": {
+      "correction": [
+       "He and I went to the cinema."
+      ]
+     }
+    },
+    {
+     "id": "en-grammar-10",
+     "prompt": "The informations you gave me were useful.",
+     "expect": {
+      "correction": [
+       "The information you gave me was useful."
+      ]
+     }
+    },
+    {
+     "id": "en-grammar-11",
+     "prompt": "I am living here since 2015.",
+     "expect": {
+      "correction": [
+       "I have been living here since 2015.",
+       "I have lived here since 2015."
+      ]
+     }
+    },
+    {
+     "id": "en-grammar-12",
+     "prompt": "Their going to the park later.",
+     "expect": {
+      "correction": [
+       "They're going to the park later.",
+       "They are going to the park later."
+      ]
+     }
+    },
+    {
+     "id": "en-grammar-13",
+     "prompt": "Neither of the answers is correct.",
+     "expect": {
+      "unchanged": true
+     }
+    },
+    {
+     "id": "en-grammar-14",
+     "prompt": "Had we left earlier, we would have caught the train.",
+     "expect": {
+      "unchanged": true
+     }
+    },
+    {
+     "id": "en-grammar-15",
+     "prompt": "She has lived in Paris for ten years.",
+     "expect": {
+      "unchanged": true
+     }
+    }
+   ]
+  },
+  {
+   "language": "en",
+   "category": "instructions",
+   "system": "Follow the instruction exactly. Answer in English.",
+   "max_output_tokens": 160,
+   "items": [
+    {
+     "id": "en-instructions-01",
+     "prompt": "Reply in exactly two sentences: You have just missed your train. What do you do now?",
+     "expect": {
+      "sentences": 2
+     }
+    },
+    {
+     "id": "en-instructions-02",
+     "prompt": "Name three fruits as a list, each line starting with \"- \". Write nothing else.",
+     "expect": {
+      "bullets": 3
+     }
+    },
+    {
+     "id": "en-instructions-03",
+     "prompt": "Describe your ideal weekend in at most 15 words.",
+     "expect": {
+      "max_words": 15
+     }
+    },
+    {
+     "id": "en-instructions-04",
+     "prompt": "Write one sentence about the sea that contains the word \"blue\".",
+     "expect": {
+      "sentences": 1,
+      "must_include": [
+       "blue"
+      ]
+     }
+    },
+    {
+     "id": "en-instructions-05",
+     "prompt": "Answer only with yes or no: Is the Earth round?",
+     "expect": {
+      "one_of": [
+       "yes"
+      ]
+     }
+    },
+    {
+     "id": "en-instructions-06",
+     "prompt": "Write everything in lowercase letters: What is your favourite season and why?",
+     "expect": {
+      "lowercase": true
+     }
+    }
+   ]
+  },
+  {
+   "language": "fr",
+   "category": "knowledge",
+   "system": "Réponds à la question en français, uniquement avec la réponse, le plus brièvement possible.",
+   "max_output_tokens": 64,
+   "items": [
+    {
+     "id": "fr-knowledge-01",
+     "prompt": "Quelle est la capitale de l'Australie ?",
+     "expect": {
+      "any_word": [
+       "canberra"
+      ]
+     }
+    },
+    {
+     "id": "fr-knowledge-02",
+     "prompt": "Quel est le symbole chimique de l'or ?",
+     "expect": {
+      "any_word": [
+       "Au"
+      ],
+      "case_sensitive": true
+     }
+    },
+    {
+     "id": "fr-knowledge-03",
+     "prompt": "Quelle est la plus grande planète de notre système solaire ?",
+     "expect": {
+      "any_word": [
+       "jupiter"
+      ]
+     }
+    },
+    {
+     "id": "fr-knowledge-04",
+     "prompt": "Qui a écrit « Roméo et Juliette » ?",
+     "expect": {
+      "any_word": [
+       "shakespeare"
+      ]
+     }
+    },
+    {
+     "id": "fr-knowledge-05",
+     "prompt": "À combien de degrés Celsius l'eau bout-elle au niveau de la mer ?",
+     "expect": {
+      "any_word": [
+       "100"
+      ]
+     }
+    },
+    {
+     "id": "fr-knowledge-06",
+     "prompt": "Quel élément a le numéro atomique 1 ?",
+     "expect": {
+      "any_word": [
+       "hydrogene"
+      ]
+     }
+    },
+    {
+     "id": "fr-knowledge-07",
+     "prompt": "En quelle année la Seconde Guerre mondiale s'est-elle terminée ?",
+     "expect": {
+      "any_word": [
+       "1945"
+      ]
+     }
+    },
+    {
+     "id": "fr-knowledge-08",
+     "prompt": "Quelle est la capitale du Canada ?",
+     "expect": {
+      "any_word": [
+       "ottawa"
+      ]
+     }
+    },
+    {
+     "id": "fr-knowledge-09",
+     "prompt": "Combien de côtés a un hexagone ?",
+     "expect": {
+      "any_word": [
+       "6",
+       "six"
+      ]
+     }
+    },
+    {
+     "id": "fr-knowledge-10",
+     "prompt": "Qui a peint la Joconde ?",
+     "expect": {
+      "any_word": [
+       "leonardo",
+       "da vinci"
+      ]
+     }
+    },
+    {
+     "id": "fr-knowledge-11",
+     "prompt": "Quelle est la racine carrée de 144 ?",
+     "expect": {
+      "any_word": [
+       "12",
+       "douze"
+      ]
+     }
+    },
+    {
+     "id": "fr-knowledge-12",
+     "prompt": "Quel organe pompe le sang dans le corps ?",
+     "expect": {
+      "any_word": [
+       "coeur"
+      ]
+     }
+    },
+    {
+     "id": "fr-knowledge-13",
+     "prompt": "Quelle est la monnaie du Japon ?",
+     "expect": {
+      "any_word": [
+       "yen"
+      ]
+     }
+    },
+    {
+     "id": "fr-knowledge-14",
+     "prompt": "Quel est le plus petit nombre premier ?",
+     "expect": {
+      "any_word": [
+       "2",
+       "deux"
+      ]
+     }
+    },
+    {
+     "id": "fr-knowledge-15",
+     "prompt": "Qui a développé la théorie de la relativité ?",
+     "expect": {
+      "any_word": [
+       "einstein"
+      ]
+     }
+    },
+    {
+     "id": "fr-knowledge-16",
+     "prompt": "Quelle est la plus haute montagne de la Terre ?",
+     "expect": {
+      "any_word": [
+       "everest"
+      ]
+     }
+    },
+    {
+     "id": "fr-knowledge-17",
+     "prompt": "Combien de minutes y a-t-il dans une journée ?",
+     "expect": {
+      "any_word": [
+       "1440"
+      ]
+     }
+    },
+    {
+     "id": "fr-knowledge-18",
+     "prompt": "Quelle est la capitale du Brésil ?",
+     "expect": {
+      "any_word": [
+       "brasilia"
+      ]
+     }
+    },
+    {
+     "id": "fr-knowledge-19",
+     "prompt": "Quelle langue compte le plus de locuteurs natifs ?",
+     "expect": {
+      "any_word": [
+       "mandarin",
+       "chinois"
+      ]
+     }
+    },
+    {
+     "id": "fr-knowledge-20",
+     "prompt": "Quelle est la formule chimique du sel de table ?",
+     "expect": {
+      "any_word": [
+       "nacl"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "language": "fr",
+   "category": "grammar",
+   "system": "Corrige la grammaire et l'orthographe de la phrase. Réponds uniquement avec la phrase corrigée, sans explication. Si elle est déjà correcte, répète-la telle quelle.",
+   "max_output_tokens": 128,
+   "items": [
+    {
+     "id": "fr-grammar-01",
+     "prompt": "Hier, je suis allé au marché, mais les magasins était fermé.",
+     "expect": {
+      "correction": [
+       "Hier, je suis allé au marché, mais les magasins étaient fermés."
+      ]
+     }
+    },
+    {
+     "id": "fr-grammar-02",
+     "prompt": "Bien qu'il ait beaucoup plu, mais nous sommes allés nous promener.",
+     "expect": {
+      "correction": [
+       "Bien qu'il ait beaucoup plu, nous sommes allés nous promener."
+      ]
+     }
+    },
+    {
+     "id": "fr-grammar-03",
+     "prompt": "Il faut que tu viens demain.",
+     "expect": {
+      "correction": [
+       "Il faut que tu viennes demain."
+      ]
+     }
+    },
+    {
+     "id": "fr-grammar-04",
+     "prompt": "Elle a mangé les pommes que j'ai acheté.",
+     "expect": {
+      "correction": [
+       "Elle a mangé les pommes que j'ai achetées."
+      ]
+     }
+    },
+    {
+     "id": "fr-grammar-05",
+     "prompt": "Si j'aurais su, je serais venu.",
+     "expect": {
+      "correction": [
+       "Si j'avais su, je serais venu."
+      ]
+     }
+    },
+    {
+     "id": "fr-grammar-06",
+     "prompt": "Les enfants a joué dans le jardin.",
+     "expect": {
+      "correction": [
+       "Les enfants ont joué dans le jardin."
+      ]
+     }
+    },
+    {
+     "id": "fr-grammar-07",
+     "prompt": "C'est le livre dont je t'ai parlé de.",
+     "expect": {
+      "correction": [
+       "C'est le livre dont je t'ai parlé."
+      ]
+     }
+    },
+    {
+     "id": "fr-grammar-08",
+     "prompt": "Nous avons allé à la plage.",
+     "expect": {
+      "correction": [
+       "Nous sommes allés à la plage.",
+       "Nous sommes allées à la plage."
+      ]
+     }
+    },
+    {
+     "id": "fr-grammar-09",
+     "prompt": "Il est plus meilleur que son frère.",
+     "expect": {
+      "correction": [
+       "Il est meilleur que son frère."
+      ]
+     }
+    },
+    {
+     "id": "fr-grammar-10",
+     "prompt": "Je vais au Paris la semaine prochaine.",
+     "expect": {
+      "correction": [
+       "Je vais à Paris la semaine prochaine."
+      ]
+     }
+    },
+    {
+     "id": "fr-grammar-11",
+     "prompt": "Ma amie arrive ce soir.",
+     "expect": {
+      "correction": [
+       "Mon amie arrive ce soir."
+      ]
+     }
+    },
+    {
+     "id": "fr-grammar-12",
+     "prompt": "Je n'ai pas rien vu.",
+     "expect": {
+      "correction": [
+       "Je n'ai rien vu."
+      ]
+     }
+    },
+    {
+     "id": "fr-grammar-13",
+     "prompt": "Je ne sais pas s'il viendra demain.",
+     "expect": {
+      "unchanged": true
+     }
+    },
+    {
+     "id": "fr-grammar-14",
+     "prompt": "Les fleurs que tu m'as offertes sont magnifiques.",
+     "expect": {
+      "unchanged": true
+     }
+    },
+    {
+     "id": "fr-grammar-15",
+     "prompt": "Bien qu'il soit fatigué, il continue de travailler.",
+     "expect": {
+      "unchanged": true
+     }
+    }
+   ]
+  },
+  {
+   "language": "fr",
+   "category": "instructions",
+   "system": "Suis exactement la consigne. Réponds en français.",
+   "max_output_tokens": 160,
+   "items": [
+    {
+     "id": "fr-instructions-01",
+     "prompt": "Réponds en exactement deux phrases : Tu viens de rater ton train. Que fais-tu maintenant ?",
+     "expect": {
+      "sentences": 2
+     }
+    },
+    {
+     "id": "fr-instructions-02",
+     "prompt": "Cite trois fruits sous forme de liste, chaque ligne commençant par \"- \". N'écris rien d'autre.",
+     "expect": {
+      "bullets": 3
+     }
+    },
+    {
+     "id": "fr-instructions-03",
+     "prompt": "Décris ton week-end idéal en 15 mots au maximum.",
+     "expect": {
+      "max_words": 15
+     }
+    },
+    {
+     "id": "fr-instructions-04",
+     "prompt": "Écris une phrase sur la mer qui contient le mot \"bleu\".",
+     "expect": {
+      "sentences": 1,
+      "must_include": [
+       ["bleu", "bleue", "bleus", "bleues"]
+      ]
+     }
+    },
+    {
+     "id": "fr-instructions-05",
+     "prompt": "Réponds uniquement par oui ou non : La Terre est-elle ronde ?",
+     "expect": {
+      "one_of": [
+       "oui"
+      ]
+     }
+    },
+    {
+     "id": "fr-instructions-06",
+     "prompt": "Écris tout en minuscules : Quelle est ta saison préférée et pourquoi ?",
+     "expect": {
+      "lowercase": true
+     }
+    }
+   ]
+  },
+  {
+   "language": "es",
+   "category": "knowledge",
+   "system": "Responde a la pregunta en español, solo con la respuesta, lo más brevemente posible.",
+   "max_output_tokens": 64,
+   "items": [
+    {
+     "id": "es-knowledge-01",
+     "prompt": "¿Cuál es la capital de Australia?",
+     "expect": {
+      "any_word": [
+       "canberra"
+      ]
+     }
+    },
+    {
+     "id": "es-knowledge-02",
+     "prompt": "¿Cuál es el símbolo químico del oro?",
+     "expect": {
+      "any_word": [
+       "Au"
+      ],
+      "case_sensitive": true
+     }
+    },
+    {
+     "id": "es-knowledge-03",
+     "prompt": "¿Cuál es el planeta más grande de nuestro sistema solar?",
+     "expect": {
+      "any_word": [
+       "jupiter"
+      ]
+     }
+    },
+    {
+     "id": "es-knowledge-04",
+     "prompt": "¿Quién escribió «Romeo y Julieta»?",
+     "expect": {
+      "any_word": [
+       "shakespeare"
+      ]
+     }
+    },
+    {
+     "id": "es-knowledge-05",
+     "prompt": "¿A cuántos grados Celsius hierve el agua al nivel del mar?",
+     "expect": {
+      "any_word": [
+       "100"
+      ]
+     }
+    },
+    {
+     "id": "es-knowledge-06",
+     "prompt": "¿Qué elemento tiene el número atómico 1?",
+     "expect": {
+      "any_word": [
+       "hidrogeno"
+      ]
+     }
+    },
+    {
+     "id": "es-knowledge-07",
+     "prompt": "¿En qué año terminó la Segunda Guerra Mundial?",
+     "expect": {
+      "any_word": [
+       "1945"
+      ]
+     }
+    },
+    {
+     "id": "es-knowledge-08",
+     "prompt": "¿Cuál es la capital de Canadá?",
+     "expect": {
+      "any_word": [
+       "ottawa"
+      ]
+     }
+    },
+    {
+     "id": "es-knowledge-09",
+     "prompt": "¿Cuántos lados tiene un hexágono?",
+     "expect": {
+      "any_word": [
+       "6",
+       "seis"
+      ]
+     }
+    },
+    {
+     "id": "es-knowledge-10",
+     "prompt": "¿Quién pintó la Mona Lisa?",
+     "expect": {
+      "any_word": [
+       "leonardo",
+       "da vinci"
+      ]
+     }
+    },
+    {
+     "id": "es-knowledge-11",
+     "prompt": "¿Cuál es la raíz cuadrada de 144?",
+     "expect": {
+      "any_word": [
+       "12",
+       "doce"
+      ]
+     }
+    },
+    {
+     "id": "es-knowledge-12",
+     "prompt": "¿Qué órgano bombea la sangre por el cuerpo?",
+     "expect": {
+      "any_word": [
+       "corazon"
+      ]
+     }
+    },
+    {
+     "id": "es-knowledge-13",
+     "prompt": "¿Cuál es la moneda de Japón?",
+     "expect": {
+      "any_word": [
+       "yen"
+      ]
+     }
+    },
+    {
+     "id": "es-knowledge-14",
+     "prompt": "¿Cuál es el número primo más pequeño?",
+     "expect": {
+      "any_word": [
+       "2",
+       "dos"
+      ]
+     }
+    },
+    {
+     "id": "es-knowledge-15",
+     "prompt": "¿Quién desarrolló la teoría de la relatividad?",
+     "expect": {
+      "any_word": [
+       "einstein"
+      ]
+     }
+    },
+    {
+     "id": "es-knowledge-16",
+     "prompt": "¿Cuál es la montaña más alta de la Tierra?",
+     "expect": {
+      "any_word": [
+       "everest"
+      ]
+     }
+    },
+    {
+     "id": "es-knowledge-17",
+     "prompt": "¿Cuántos minutos tiene un día?",
+     "expect": {
+      "any_word": [
+       "1440"
+      ]
+     }
+    },
+    {
+     "id": "es-knowledge-18",
+     "prompt": "¿Cuál es la capital de Brasil?",
+     "expect": {
+      "any_word": [
+       "brasilia"
+      ]
+     }
+    },
+    {
+     "id": "es-knowledge-19",
+     "prompt": "¿Qué idioma tiene más hablantes nativos?",
+     "expect": {
+      "any_word": [
+       "mandarin",
+       "chino"
+      ]
+     }
+    },
+    {
+     "id": "es-knowledge-20",
+     "prompt": "¿Cuál es la fórmula química de la sal de mesa?",
+     "expect": {
+      "any_word": [
+       "nacl"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "language": "es",
+   "category": "grammar",
+   "system": "Corrige la gramática y la ortografía de la frase. Responde solo con la frase corregida, sin explicación. Si ya es correcta, repítela sin cambios.",
+   "max_output_tokens": 128,
+   "items": [
+    {
+     "id": "es-grammar-01",
+     "prompt": "Ayer fui al mercado, pero las tiendas estaba cerrada.",
+     "expect": {
+      "correction": [
+       "Ayer fui al mercado, pero las tiendas estaban cerradas."
+      ]
+     }
+    },
+    {
+     "id": "es-grammar-02",
+     "prompt": "Aunque llovía mucho, pero salimos a pasear.",
+     "expect": {
+      "correction": [
+       "Aunque llovía mucho, salimos a pasear."
+      ]
+     }
+    },
+    {
+     "id": "es-grammar-03",
+     "prompt": "Espero que tú vienes mañana.",
+     "expect": {
+      "correction": [
+       "Espero que tú vengas mañana.",
+       "Espero que vengas mañana."
+      ]
+     }
+    },
+    {
+     "id": "es-grammar-04",
+     "prompt": "Si tendría dinero, viajaría por el mundo.",
+     "expect": {
+      "correction": [
+       "Si tuviera dinero, viajaría por el mundo.",
+       "Si tuviese dinero, viajaría por el mundo."
+      ]
+     }
+    },
+    {
+     "id": "es-grammar-05",
+     "prompt": "La problema es muy difícil.",
+     "expect": {
+      "correction": [
+       "El problema es muy difícil."
+      ]
+     }
+    },
+    {
+     "id": "es-grammar-06",
+     "prompt": "Yo soy cansado después del trabajo.",
+     "expect": {
+      "correction": [
+       "Yo estoy cansado después del trabajo.",
+       "Estoy cansado después del trabajo."
+      ]
+     }
+    },
+    {
+     "id": "es-grammar-07",
+     "prompt": "Los niños juega en el parque.",
+     "expect": {
+      "correction": [
+       "Los niños juegan en el parque."
+      ]
+     }
+    },
+    {
+     "id": "es-grammar-08",
+     "prompt": "Hubieron muchas personas en la fiesta.",
+     "expect": {
+      "correction": [
+       "Hubo muchas personas en la fiesta."
+      ]
+     }
+    },
+    {
+     "id": "es-grammar-09",
+     "prompt": "Me gustan el chocolate.",
+     "expect": {
+      "correction": [
+       "Me gusta el chocolate."
+      ]
+     }
+    },
+    {
+     "id": "es-grammar-10",
+     "prompt": "Pienso de que es una buena idea.",
+     "expect": {
+      "correction": [
+       "Pienso que es una buena idea."
+      ]
+     }
+    },
+    {
+     "id": "es-grammar-11",
+     "prompt": "Ella es más mejor que su hermana.",
+     "expect": {
+      "correction": [
+       "Ella es mejor que su hermana."
+      ]
+     }
+    },
+    {
+     "id": "es-grammar-12",
+     "prompt": "Ayer he comido con mis padres.",
+     "expect": {
+      "correction": [
+       "Ayer comí con mis padres."
+      ]
+     }
+    },
+    {
+     "id": "es-grammar-13",
+     "prompt": "Cuando llegues a casa, llámame.",
+     "expect": {
+      "unchanged": true
+     }
+    },
+    {
+     "id": "es-grammar-14",
+     "prompt": "No creo que sea una buena idea.",
+     "expect": {
+      "unchanged": true
+     }
+    },
+    {
+     "id": "es-grammar-15",
+     "prompt": "Ojalá hubiera estudiado más.",
+     "expect": {
+      "unchanged": true
+     }
+    }
+   ]
+  },
+  {
+   "language": "es",
+   "category": "instructions",
+   "system": "Sigue exactamente la instrucción. Responde en español.",
+   "max_output_tokens": 160,
+   "items": [
+    {
+     "id": "es-instructions-01",
+     "prompt": "Responde en exactamente dos frases: Acabas de perder el tren. ¿Qué haces ahora?",
+     "expect": {
+      "sentences": 2
+     }
+    },
+    {
+     "id": "es-instructions-02",
+     "prompt": "Nombra tres frutas en una lista, cada línea empezando con \"- \". No escribas nada más.",
+     "expect": {
+      "bullets": 3
+     }
+    },
+    {
+     "id": "es-instructions-03",
+     "prompt": "Describe tu fin de semana ideal en 15 palabras como máximo.",
+     "expect": {
+      "max_words": 15
+     }
+    },
+    {
+     "id": "es-instructions-04",
+     "prompt": "Escribe una frase sobre el mar que contenga la palabra \"azul\".",
+     "expect": {
+      "sentences": 1,
+      "must_include": [
+       ["azul", "azules"]
+      ]
+     }
+    },
+    {
+     "id": "es-instructions-05",
+     "prompt": "Responde solo con sí o no: ¿Es redonda la Tierra?",
+     "expect": {
+      "one_of": [
+       "si"
+      ]
+     }
+    },
+    {
+     "id": "es-instructions-06",
+     "prompt": "Escríbelo todo en minúsculas: ¿Cuál es tu estación favorita y por qué?",
+     "expect": {
+      "lowercase": true
+     }
+    }
+   ]
+  },
+  {
+   "language": "en",
+   "category": "json",
+   "system": "Reply with valid JSON only: no code fences, no explanation.",
+   "max_output_tokens": 384,
+   "items": [
+    {
+     "id": "en-json-01",
+     "prompt": "Extract the person as JSON with the keys name (string), age (number), city (string) and job (string): Maria Lopez, 34, lives in Valencia and works as a nurse.",
+     "expect": {
+      "json": {
+       "equals": {
+        "name": "Maria Lopez",
+        "age": 34,
+        "city": "Valencia",
+        "job": "nurse"
+       }
+      }
+     }
+    },
+    {
+     "id": "en-json-02",
+     "prompt": "Convert the order to JSON with the keys order_id (number) and items (a list of objects with name and quantity; use the item names as written): Order #1042: 2 apples, 1 bread, 3 bananas.",
+     "expect": {
+      "json": {
+       "equals": {
+        "order_id": 1042,
+        "items": [
+         {
+          "name": "apples",
+          "quantity": 2
+         },
+         {
+          "name": "bread",
+          "quantity": 1
+         },
+         {
+          "name": "bananas",
+          "quantity": 3
+         }
+        ]
+       }
+      }
+     }
+    },
+    {
+     "id": "en-json-03",
+     "prompt": "Describe the meeting as JSON with the keys date (YYYY-MM-DD), confirmed (boolean) and room (string, or null if unknown): The meeting on 14 March 2026 is confirmed; no room has been assigned yet.",
+     "expect": {
+      "json": {
+       "equals": {
+        "date": "2026-03-14",
+        "confirmed": true,
+        "room": null
+       }
+      }
+     }
+    },
+    {
+     "id": "en-json-04",
+     "prompt": "Put the following sentence, exactly as written, into a JSON object under the key quote: He said \"hello\" and left.",
+     "expect": {
+      "json": {
+       "equals": {
+        "quote": "He said \"hello\" and left."
+       }
+      }
+     }
+    },
+    {
+     "id": "en-json-05",
+     "prompt": "Describe the team as JSON with the keys manager (an object with name and email) and reports (a list of names): Alice (alice@example.com) manages Bob and Carol.",
+     "expect": {
+      "json": {
+       "equals": {
+        "manager": {
+         "name": "Alice",
+         "email": "alice@example.com"
+        },
+        "reports": [
+         "Bob",
+         "Carol"
+        ]
+       }
+      }
+     }
+    },
+    {
+     "id": "en-json-06",
+     "prompt": "Read this JSON: {\"users\": [{\"name\": \"Ann\", \"age\": 31}, {\"name\": \"Ben\", \"age\": 27}, {\"name\": \"Cid\", \"age\": 45}]}\nReply with a JSON object with the keys oldest (the name of the oldest user) and total_age (the sum of all ages).",
+     "expect": {
+      "json": {
+       "equals": {
+        "oldest": "Cid",
+        "total_age": 103
+       }
+      }
+     }
+    },
+    {
+     "id": "en-json-07",
+     "prompt": "Fix this invalid JSON and return the corrected JSON with the same data: {name: 'Tom', age: 30, tags: ['a', 'b',],}",
+     "expect": {
+      "json": {
+       "equals": {
+        "name": "Tom",
+        "age": 30,
+        "tags": [
+         "a",
+         "b"
+        ]
+       }
+      }
+     }
+    },
+    {
+     "id": "en-json-08",
+     "prompt": "Convert the Celsius temperatures to Fahrenheit and reply with a JSON object with the key fahrenheit (a list of numbers in the same order): {\"celsius\": [0, 100, -40]}",
+     "expect": {
+      "json": {
+       "equals": {
+        "fahrenheit": [
+         32,
+         212,
+         -40
+        ]
+       }
+      }
+     }
+    },
+    {
+     "id": "en-json-09",
+     "prompt": "Read this JSON: {\"products\": [{\"name\": \"pen\", \"price\": 1.5, \"in_stock\": true}, {\"name\": \"ink\", \"price\": 7, \"in_stock\": false}, {\"name\": \"pad\", \"price\": 3.25, \"in_stock\": true}]}\nReply with a JSON object with the key in_stock (a list of the names of the products in stock, in the same order).",
+     "expect": {
+      "json": {
+       "equals": {
+        "in_stock": [
+         "pen",
+         "pad"
+        ]
+       }
+      }
+     }
+    },
+    {
+     "id": "en-json-10",
+     "prompt": "Classify the sentiment of this review and reply with a JSON object with the keys sentiment (one of \"positive\", \"neutral\", \"negative\") and confidence (a number from 0 to 1): \"The battery died after one day, very disappointing.\"",
+     "expect": {
+      "json": {
+       "fields": {
+        "sentiment": "negative"
+       },
+       "keys": [
+        "sentiment",
+        "confidence"
+       ],
+       "ranges": {
+        "confidence": [
+         0,
+         1
+        ]
+       }
+      }
+     }
+    }
+   ]
+  },
+  {
+   "language": "en",
+   "category": "tools",
+   "system": "You can call these tools:\n[{\"name\": \"get_weather\", \"description\": \"Current weather for a city.\", \"parameters\": {\"city\": {\"type\": \"string\", \"required\": true}, \"unit\": {\"type\": \"string\", \"enum\": [\"celsius\", \"fahrenheit\"], \"default\": \"celsius\"}}}, {\"name\": \"set_timer\", \"description\": \"Starts a countdown timer.\", \"parameters\": {\"minutes\": {\"type\": \"integer\", \"required\": true}, \"label\": {\"type\": \"string\"}}}, {\"name\": \"send_email\", \"description\": \"Sends an email.\", \"parameters\": {\"to\": {\"type\": \"string\", \"required\": true}, \"subject\": {\"type\": \"string\", \"required\": true}, \"body\": {\"type\": \"string\", \"required\": true}}}, {\"name\": \"convert_currency\", \"description\": \"Converts an amount between currencies.\", \"parameters\": {\"amount\": {\"type\": \"number\", \"required\": true}, \"from\": {\"type\": \"string\", \"description\": \"ISO 4217 code\", \"required\": true}, \"to\": {\"type\": \"string\", \"description\": \"ISO 4217 code\", \"required\": true}}}, {\"name\": \"search_web\", \"description\": \"Searches the web.\", \"parameters\": {\"query\": {\"type\": \"string\", \"required\": true}}}, {\"name\": \"add_calendar_event\", \"description\": \"Adds an event to the user's calendar.\", \"parameters\": {\"title\": {\"type\": \"string\", \"required\": true}, \"date\": {\"type\": \"string\", \"description\": \"YYYY-MM-DD\", \"required\": true}, \"time\": {\"type\": \"string\", \"description\": \"HH:MM, 24-hour\"}}}]\n\nToday is Thursday, 2026-11-26. If the user's request needs tools, reply with only a JSON array of calls, like [{\"name\": \"tool_name\", \"arguments\": {...}}]. If no tool is needed, reply with only []. No code fences, no explanation.",
+   "max_output_tokens": 256,
+   "items": [
+    {
+     "id": "en-tools-01",
+     "prompt": "What's the weather in Lisbon?",
+     "expect": {
+      "calls": [
+       {
+        "name": "get_weather",
+        "arguments": {
+         "city": [
+          "Lisbon",
+          "Lisboa"
+         ]
+        },
+        "optional": [
+         "unit"
+        ]
+       }
+      ]
+     }
+    },
+    {
+     "id": "en-tools-02",
+     "prompt": "Set a timer for 15 minutes for the pasta.",
+     "expect": {
+      "calls": [
+       {
+        "name": "set_timer",
+        "arguments": {
+         "minutes": 15
+        },
+        "optional": [
+         "label"
+        ]
+       }
+      ]
+     }
+    },
+    {
+     "id": "en-tools-03",
+     "prompt": "How much is 250 euros in US dollars?",
+     "expect": {
+      "calls": [
+       {
+        "name": "convert_currency",
+        "arguments": {
+         "amount": 250,
+         "from": "EUR",
+         "to": "USD"
+        }
+       }
+      ]
+     }
+    },
+    {
+     "id": "en-tools-04",
+     "prompt": "Email bob@example.com with the subject 'Lunch' and tell him I'm running 10 minutes late.",
+     "expect": {
+      "calls": [
+       {
+        "name": "send_email",
+        "arguments": {
+         "to": "bob@example.com",
+         "subject": "Lunch",
+         "body": "*"
+        }
+       }
+      ]
+     }
+    },
+    {
+     "id": "en-tools-05",
+     "prompt": "Add a dentist appointment on December 3rd at 9:30.",
+     "expect": {
+      "calls": [
+       {
+        "name": "add_calendar_event",
+        "arguments": {
+         "title": "*",
+         "date": "2026-12-03",
+         "time": "09:30"
+        }
+       }
+      ]
+     }
+    },
+    {
+     "id": "en-tools-06",
+     "prompt": "Thanks, that's all!",
+     "expect": {
+      "calls": []
+     }
+    },
+    {
+     "id": "en-tools-07",
+     "prompt": "What's the weather in Tokyo in Fahrenheit?",
+     "expect": {
+      "calls": [
+       {
+        "name": "get_weather",
+        "arguments": {
+         "city": "Tokyo",
+         "unit": "fahrenheit"
+        }
+       }
+      ]
+     }
+    },
+    {
+     "id": "en-tools-08",
+     "prompt": "What's the weather in Paris and in Rome?",
+     "expect": {
+      "calls": [
+       {
+        "name": "get_weather",
+        "arguments": {
+         "city": "Paris"
+        },
+        "optional": [
+         "unit"
+        ]
+       },
+       {
+        "name": "get_weather",
+        "arguments": {
+         "city": "Rome"
+        },
+        "optional": [
+         "unit"
+        ]
+       }
+      ]
+     }
+    },
+    {
+     "id": "en-tools-09",
+     "prompt": "Set a timer for an hour and a half.",
+     "expect": {
+      "calls": [
+       {
+        "name": "set_timer",
+        "arguments": {
+         "minutes": 90
+        },
+        "optional": [
+         "label"
+        ]
+       }
+      ]
+     }
+    },
+    {
+     "id": "en-tools-10",
+     "prompt": "Put a reminder in my calendar to call mom tomorrow at 8 am.",
+     "expect": {
+      "calls": [
+       {
+        "name": "add_calendar_event",
+        "arguments": {
+         "title": "*",
+         "date": "2026-11-27",
+         "time": "08:00"
+        }
+       }
+      ]
+     }
+    },
+    {
+     "id": "en-tools-11",
+     "prompt": "Search the web for the latest Rust release notes.",
+     "expect": {
+      "calls": [
+       {
+        "name": "search_web",
+        "arguments": {
+         "query": "*"
+        }
+       }
+      ]
+     }
+    },
+    {
+     "id": "en-tools-12",
+     "prompt": "Convert 1000 yen to euros and tell me the weather in Berlin.",
+     "expect": {
+      "calls": [
+       {
+        "name": "convert_currency",
+        "arguments": {
+         "amount": 1000,
+         "from": "JPY",
+         "to": "EUR"
+        }
+       },
+       {
+        "name": "get_weather",
+        "arguments": {
+         "city": "Berlin"
+        },
+        "optional": [
+         "unit"
+        ]
+       }
+      ]
+     }
+    },
+    {
+     "id": "en-tools-13",
+     "prompt": "Write me a haiku about autumn.",
+     "expect": {
+      "calls": []
+     }
+    }
+   ]
+  }
+ ]
+}

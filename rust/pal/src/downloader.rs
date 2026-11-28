@@ -4,7 +4,7 @@
 use std::fs::File;
 use std::io::{Read, Write};
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
 use sha2::{Digest, Sha256};
@@ -17,6 +17,13 @@ const POCKET: &str = "pocket/kyutai/pocket-tts-without-voice-cloning";
 /// A server that sends nothing this long ends the download; a slow but steady one doesn't.
 const STALL: Duration = Duration::from_secs(30);
 
+/// Bytes of the running download, both 0 without one. `total` stays 0 if a server doesn't tell a file's size.
+#[derive(Default)]
+pub struct Progress {
+    pub done: AtomicU64,
+    pub total: AtomicU64,
+}
+
 /// Path in the model folder, URL, sha256.
 type Entry = (&'static str, &'static str, &'static str);
 
@@ -26,8 +33,8 @@ const SILERO: Entry = (
     "1a153a22f4509e292a94e67d6f9b85e8deb25b4988682b7e174c65279d8788e3",
 );
 
-/// Every file Pal can use. Licenses: Silero VAD MIT, Smart Turn BSD-2, Parakeet CC-BY-4.0, Qwen Apache-2.0,
-/// Pocket TTS CC-BY-4.0.
+/// Every file Pal can use. Licenses: Silero VAD MIT, Smart Turn BSD-2, Parakeet CC-BY-4.0,
+/// Gemma 4, Granite 3.3, SmolLM3 and Granite 4.0 Apache-2.0, Pocket TTS CC-BY-4.0.
 const CATALOG: &[Entry] = &[
     SILERO,
     (
@@ -51,24 +58,24 @@ const CATALOG: &[Entry] = &[
         "d58544679ea4bc6ac563d1f545eb7d474bd6cfa467f0a6e2c1dc1c7d37e3c35d",
     ),
     (
-        "Qwen3.5-2B-Q4_K_M.gguf",
-        "unsloth/Qwen3.5-2B-GGUF/resolve/f6d5376be1edb4d416d56da11e5397a961aca8ae/Qwen3.5-2B-Q4_K_M.gguf",
-        "aaf42c8b7c3cab2bf3d69c355048d4a0ee9973d48f16c731c0520ee914699223",
+        "SmolLM3-Q4_K_M.gguf",
+        "ggml-org/SmolLM3-3B-GGUF/resolve/4965cb60b150737b68a0408c36aeefb65078f894/SmolLM3-Q4_K_M.gguf",
+        "8334b850b7bd46238c16b0c550df2138f0889bf433809008cc17a8b05761863e",
     ),
     (
-        "Qwen3.5-0.8B-Q4_K_M.gguf",
-        "unsloth/Qwen3.5-0.8B-GGUF/resolve/6ab461498e2023f6e3c1baea90a8f0fe38ab64d0/Qwen3.5-0.8B-Q4_K_M.gguf",
-        "bd258782e35f7f458f8aced1adc053e6e92e89bc735ba3be89d38a06121dc517",
+        "gemma-4-E2B-it-Q4_K_M.gguf",
+        "unsloth/gemma-4-E2B-it-GGUF/resolve/0314792d7f1f7e229411f620751375812bb9faf2/gemma-4-E2B-it-Q4_K_M.gguf",
+        "740185b21d22ceb83a11c3aa62ad5842ef32c70f6096d756bbee85a1e4ec34b8",
     ),
     (
-        "Qwen3.5-4B-Q4_K_M.gguf",
-        "unsloth/Qwen3.5-4B-GGUF/resolve/e87f176479d0855a907a41277aca2f8ee7a09523/Qwen3.5-4B-Q4_K_M.gguf",
-        "00fe7986ff5f6b463e62455821146049db6f9313603938a70800d1fb69ef11a4",
+        "granite-4.0-h-1b-Q4_0.gguf",
+        "ibm-granite/granite-4.0-h-1b-GGUF/resolve/408580999f394d67b425c1e99ae9fe4a540c9672/granite-4.0-h-1b-Q4_0.gguf",
+        "23b20864c9544bd98ac6d5b8c53dec61992cc7add09fdd5f6b77472a4679a148",
     ),
     (
-        "Qwen3.5-9B-Q4_K_M.gguf",
-        "unsloth/Qwen3.5-9B-GGUF/resolve/3885219b6810b007914f3a7950a8d1b469d598a5/Qwen3.5-9B-Q4_K_M.gguf",
-        "03b74727a860a56338e042c4420bb3f04b2fec5734175f4cb9fa853daf52b7e8",
+        "granite-3.3-2b-instruct-Q4_K_M.gguf",
+        "ibm-granite/granite-3.3-2b-instruct-GGUF/resolve/7cdf86ccd1f1bb3491c9b7017b033f2e51367397/granite-3.3-2b-instruct-Q4_K_M.gguf",
+        "ac71e9e32c0bea919b409c5918f69ca74339854b0319c5065e4e9fb6d95c4852",
     ),
     (
         "pocket/kyutai/pocket-tts-without-voice-cloning/languages/german/model.safetensors",
@@ -122,8 +129,19 @@ const CATALOG: &[Entry] = &[
     ),
 ];
 
-/// Larger LLMs, fetched only once chosen in the settings.
-const ON_REQUEST: &[&str] = &["Qwen3.5-4B-Q4_K_M.gguf", "Qwen3.5-9B-Q4_K_M.gguf"];
+/// Further LLMs, fetched only once chosen in the settings.
+const ON_REQUEST: &[&str] = &["gemma-4-E2B-it-Q4_K_M.gguf", "granite-4.0-h-1b-Q4_0.gguf", "SmolLM3-Q4_K_M.gguf"];
+
+/// Models Pal no longer offers: never fetched again, but a copy from an earlier version can still be removed.
+const RETIRED: &[&str] = &[
+    "Qwen3.5-0.8B-Q4_K_M.gguf",
+    "Qwen3.5-2B-Q4_K_M.gguf",
+    "Qwen3.5-4B-Q4_K_M.gguf",
+    "Qwen3.5-9B-Q4_K_M.gguf",
+    "Llama-3.2-3B-Instruct-Q4_K_M.gguf",
+    "Llama-3.2-1B-Instruct-Q4_K_M.gguf",
+    "Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf",
+];
 
 /// The Parakeet folder's files.
 pub fn stt_files(folder: &str) -> Vec<String> {
@@ -149,19 +167,33 @@ pub fn all_files() -> Vec<String> {
     CATALOG.iter().filter(|(path, ..)| !ON_REQUEST.contains(path)).map(|(path, ..)| path.to_string()).collect()
 }
 
-/// Deletes a catalog LLM with its saved prompt states and an unfinished download. Refuses any other file.
+/// Folder in the model folder for GGUF files the user brought, `Settings.OWN_MODEL_DIR`; Pal never downloads into it.
+const OWN_LLM_DIR: &str = "llm";
+
+/// `llm/<file>.gguf`: one of the user's own models.
+fn is_own_llm(name: &str) -> bool {
+    name.strip_prefix(OWN_LLM_DIR)
+        .and_then(|rest| rest.strip_prefix('/'))
+        .is_some_and(|file| file.ends_with(".gguf") && !file.contains(['/', '\\']))
+}
+
+/// Deletes a catalog LLM or one of one's own, with its saved prompt states and an unfinished download or copy.
+/// Refuses any other file.
 pub fn remove_llm(dir: &Path, name: &str) -> Result<()> {
-    if !name.ends_with(".gguf") || !CATALOG.iter().any(|(path, ..)| *path == name) {
+    let catalog = CATALOG.iter().any(|(path, ..)| *path == name) || RETIRED.contains(&name);
+    if !name.ends_with(".gguf") || !(catalog || is_own_llm(name)) {
         return Err(Error::Download(format!("{name} is not a catalog model")));
     }
     let failed = |e: std::io::Error| Error::Download(format!("removing {name}: {e}"));
-    let saved = format!("{name}.");
-    let mut files = vec![dir.join(name), dir.join(name).with_extension("part")];
-    for entry in std::fs::read_dir(dir).map_err(failed)? {
+    let path = dir.join(name);
+    let folder = path.parent().unwrap_or(dir);
+    let saved = format!("{}.", name.rsplit('/').next().unwrap_or(name));
+    let mut files = vec![path.clone(), path.with_extension("part")];
+    for entry in std::fs::read_dir(folder).map_err(failed)? {
         let file = entry.map_err(failed)?.file_name();
         let file = file.to_string_lossy();
         if file.starts_with(&saved) && (file.ends_with(".state") || file.ends_with(".tmp")) {
-            files.push(dir.join(file.as_ref()));
+            files.push(folder.join(file.as_ref()));
         }
     }
     for file in files {
@@ -176,26 +208,40 @@ pub fn remove_llm(dir: &Path, name: &str) -> Result<()> {
 /// Deletes the saved prompt states of every model; they are made again on the next start.
 pub fn remove_llm_caches(dir: &Path) -> Result<()> {
     let failed = |e: std::io::Error| Error::Download(format!("removing the LLM cache: {e}"));
-    for entry in std::fs::read_dir(dir).map_err(failed)? {
-        let entry = entry.map_err(failed)?;
-        let file = entry.file_name();
-        let file = file.to_string_lossy();
-        if file.contains(".gguf.") && (file.ends_with(".state") || file.ends_with(".tmp")) {
-            std::fs::remove_file(entry.path()).map_err(failed)?;
+    let own = dir.join(OWN_LLM_DIR);
+    for folder in [dir, own.as_path()] {
+        if folder != dir && !folder.is_dir() {
+            continue;
+        }
+        for entry in std::fs::read_dir(folder).map_err(failed)? {
+            let entry = entry.map_err(failed)?;
+            let file = entry.file_name();
+            let file = file.to_string_lossy();
+            if file.contains(".gguf.") && (file.ends_with(".state") || file.ends_with(".tmp")) {
+                std::fs::remove_file(entry.path()).map_err(failed)?;
+            }
         }
     }
     Ok(())
 }
 
 /// Downloads each of `files` (paths in `dir`) that is missing. A file not in the catalog must be there already.
-/// Setting `stop` ends it within a read.
-pub fn ensure(dir: &Path, files: &[String], stop: &AtomicBool) -> Result<()> {
+/// Setting `stop` ends it within a read. `progress` counts the bytes while it runs.
+pub fn ensure(dir: &Path, files: &[String], stop: &AtomicBool, progress: &Progress) -> Result<()> {
+    let result = fetch_missing(dir, files, stop, progress);
+    progress.done.store(0, Ordering::Relaxed);
+    progress.total.store(0, Ordering::Relaxed);
+    result
+}
+
+fn fetch_missing(dir: &Path, files: &[String], stop: &AtomicBool, progress: &Progress) -> Result<()> {
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .timeout_connect(Some(STALL))
         .timeout_recv_response(Some(STALL))
         .timeout_per_read(Some(STALL))
         .build()
         .into();
+    let mut missing = Vec::new();
     for name in files {
         let path = dir.join(name);
         if path.exists() {
@@ -205,8 +251,22 @@ pub fn ensure(dir: &Path, files: &[String], stop: &AtomicBool) -> Result<()> {
             return Err(Error::Download(format!("{} is missing", path.display())));
         };
         let url = if url.starts_with("https://") { url.to_string() } else { format!("{HF}/{url}") };
+        missing.push((name, path, url, *sha256));
+    }
+    let mut total = Some(0);
+    for (_, _, url, _) in &missing {
+        if stop.load(Ordering::Relaxed) {
+            return Err(Error::Stopped);
+        }
+        total = remote_size(&agent, url).map(|size| total.unwrap_or(0) + size);
+        if total.is_none() {
+            break;
+        }
+    }
+    progress.total.store(total.unwrap_or(0), Ordering::Relaxed);
+    for (name, path, url, sha256) in missing {
         eprintln!("llm_pal: downloading {name}");
-        if let Err(e) = download(&agent, &url, &path, sha256, stop) {
+        if let Err(e) = download(&agent, &url, &path, sha256, stop, progress) {
             return Err(if stop.load(Ordering::Relaxed) {
                 Error::Stopped
             } else {
@@ -218,12 +278,19 @@ pub fn ensure(dir: &Path, files: &[String], stop: &AtomicBool) -> Result<()> {
     Ok(())
 }
 
+/// The file's size, asked uncompressed as it is counted while downloading.
+fn remote_size(agent: &ureq::Agent, url: &str) -> Option<u64> {
+    let response = agent.head(url).header("Accept-Encoding", "identity").call().ok()?;
+    response.headers().get("content-length")?.to_str().ok()?.parse().ok()
+}
+
 fn download(
     agent: &ureq::Agent,
     url: &str,
     path: &Path,
     sha256: &str,
     stop: &AtomicBool,
+    progress: &Progress,
 ) -> std::result::Result<(), Box<dyn std::error::Error>> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -245,6 +312,7 @@ fn download(
         }
         hash.update(&buf[..n]);
         file.write_all(&buf[..n])?;
+        progress.done.fetch_add(n as u64, Ordering::Relaxed);
     }
     file.sync_all()?;
     let got: String = hash.finalize().iter().map(|b| format!("{b:02x}")).collect();
@@ -278,7 +346,7 @@ mod tests {
     #[test]
     fn larger_models_are_not_part_of_the_setup() {
         let files = all_files();
-        assert!(files.iter().any(|f| f == "Qwen3.5-2B-Q4_K_M.gguf"));
+        assert!(files.iter().any(|f| f == "granite-3.3-2b-instruct-Q4_K_M.gguf"));
         for model in ON_REQUEST {
             assert!(CATALOG.iter().any(|(p, ..)| p == model), "{model}");
             assert!(!files.iter().any(|f| f == model), "{model}");
@@ -289,8 +357,9 @@ mod tests {
     fn removing_the_caches_keeps_the_models() {
         let dir = std::env::temp_dir().join(format!("pal-remove-caches-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let gone = ["a.gguf.01.state", "b.gguf.02.state", "b.gguf.03.tmp"];
-        let kept = ["a.gguf", "b.gguf", "b.part", "notes.state"];
+        std::fs::create_dir_all(dir.join(OWN_LLM_DIR)).unwrap();
+        let gone = ["a.gguf.01.state", "b.gguf.02.state", "b.gguf.03.tmp", "llm/c.gguf.04.state"];
+        let kept = ["a.gguf", "b.gguf", "b.part", "notes.state", "llm/c.gguf"];
         for file in gone.iter().chain(&kept) {
             std::fs::write(dir.join(file), b"x").unwrap();
         }
@@ -319,7 +388,23 @@ mod tests {
         assert!(kept.iter().all(|f| dir.join(f).exists()));
         assert!(remove_llm(&dir, "mine.gguf").is_err());
         assert!(remove_llm(&dir, "../mine.gguf").is_err());
+        assert!(remove_llm(&dir, "llm/../mine.gguf").is_err());
         assert!(dir.join("mine.gguf").exists());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn removing_an_own_model_takes_only_its_own_files() {
+        let dir = std::env::temp_dir().join(format!("pal-remove-own-llm-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join(OWN_LLM_DIR)).unwrap();
+        let gone = ["llm/mine.gguf", "llm/mine.part", "llm/mine.gguf.0123.state"];
+        let kept = ["llm/other.gguf", "llm/other.gguf.0123.state", "mine.gguf.0123.state"];
+        for file in gone.iter().chain(&kept) {
+            std::fs::write(dir.join(file), b"x").unwrap();
+        }
+        remove_llm(&dir, gone[0]).unwrap();
+        assert!(gone.iter().all(|f| !dir.join(f).exists()));
+        assert!(kept.iter().all(|f| dir.join(f).exists()));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

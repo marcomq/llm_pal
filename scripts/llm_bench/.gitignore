@@ -1,0 +1,8 @@
+/target
+# Models, unfinished downloads and what review.py, report.py and score.py generate; the JSONL in results/ is the record.
+*.gguf
+*.part
+/review*.csv
+/report*/
+/scores*/
+__pycache__/

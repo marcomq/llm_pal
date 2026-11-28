@@ -159,7 +159,7 @@ mod tests {
     #[test]
     fn a_small_file_needs_only_a_system_prompt() {
         let c = Character::parse("[system]\nYou are Rosa,\nkind to {name}.", "Rosa", Language::English).unwrap();
-        assert!(c.system.starts_with("You are Rosa, kind to Michael. Square brackets"));
+        assert!(c.system.starts_with("You are Rosa, kind to Michael. What you hear comes from speech recognition"));
         assert_eq!(c.call_words, ["rosa"]);
         assert!(c.examples.is_empty() && c.jokes.is_empty() && c.replies.is_empty());
     }

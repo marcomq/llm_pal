@@ -1,0 +1,21 @@
+[package]
+name = "llm-bench"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[workspace]
+
+[dependencies]
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+libc = "0.2"
+llama-cpp-2 = "0.1.160"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+# Built-in Mozilla roots, as in Pal's downloader.
+ureq = "3"
+
+[profile.release]
+debug = "line-tables-only"

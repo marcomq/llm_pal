@@ -72,13 +72,58 @@ impl Conversation {
         if !early {
             self.send(AgentEvent::Heard(line.clone()));
         }
-        let canned = joke.or_else(|| self.persona.quip(&text)).or_else(|| self.persona.pooled(&text));
-        let reply = match canned {
-            Some(canned) => Reply::Canned(canned),
-            None => Reply::Model(enrich::prompt_line(&text, &line, self.cfg.language)),
-        };
+        let reply = self.reply_to(joke, &text, &line);
         let ended = (!early).then(|| speech_end(t0, &seg));
         self.start(Prepared { text, line, early, ended, stt_ms, text_at, reply, pcm: seg.pcm }, t0, tags_before)
+    }
+
+    /// A typed line is meant for Pal, also in party mode: it ends whatever runs and is answered without tags.
+    pub(super) fn typed(&mut self, phase: Phase, text: String) -> Phase {
+        let text = text.trim().to_string();
+        if text.is_empty() {
+            return phase;
+        }
+        match phase {
+            Phase::Replying(t) if t.held => drop(self.drop_turn(t)),
+            Phase::Replying(t) => {
+                if let Err(e) = self.transport.interrupt(&t.id) {
+                    eprintln!("llm_pal: {e}");
+                }
+                self.done(t);
+            }
+            _ => {}
+        }
+        self.carry = None;
+        if self.barge.take().is_some() || self.speaking() {
+            self.interrupt_last_reply();
+        }
+        if let Some(party) = &mut self.party {
+            party.forget();
+        }
+        let t0 = Instant::now();
+        if let Some(t) = self.timing.take() {
+            t.finish(None, &|e| self.send(e));
+        }
+        self.send(AgentEvent::Heard(text.clone()));
+        let joke = self.persona.joke(&text);
+        let reply = self.reply_to(joke, &text, &text);
+        let tags_before = self.tags.clone();
+        let p = Prepared {
+            line: text.clone(),
+            text,
+            early: false,
+            ended: Some(t0),
+            stt_ms: 0,
+            text_at: t0,
+            reply,
+            pcm: Vec::new(),
+        };
+        self.start(p, t0, tags_before)
+    }
+
+    fn reply_to(&mut self, joke: Option<String>, text: &str, line: &str) -> Reply {
+        let canned = joke.or_else(|| self.persona.quip(text)).or_else(|| self.persona.pooled(text));
+        canned.map_or_else(|| Reply::Model(enrich::prompt_line(text, line, self.cfg.language)), Reply::Canned)
     }
 
     /// Party mode: the room went quiet after talk Pal didn't answer.

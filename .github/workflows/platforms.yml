@@ -6,6 +6,8 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  # The prebuilt ONNX Runtime needs iOS 15.1; Rust's default is 10.0.
+  IPHONEOS_DEPLOYMENT_TARGET: "15.1"
 
 jobs:
   build:
